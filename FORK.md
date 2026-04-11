@@ -4,6 +4,72 @@ This repository is a fork of [`getcompanion-ai/feynman`](https://github.com/getc
 
 This file tracks all fork-specific customisations — what changed, why, which files are affected, and what to watch for when syncing with upstream.
 
+## Installing This Fork
+
+This fork runs directly from source via Node.js. There is no binary to download.
+
+### Prerequisites
+
+- Node.js ≥ 18 (check: `node --version`)
+- npm (bundled with Node.js)
+
+### First-time setup
+
+```bash
+# 1. Clone the fork
+git clone <fork-repo-url> ~/projects/feynman
+cd ~/projects/feynman
+
+# 2. Install dependencies
+npm install
+
+# 3. Build the TypeScript sources
+npm run build
+
+# 4. Wire the feynman command to the fork
+#    Choose the directory that is already on your PATH, or add a new one.
+#    Common choices: ~/.local/bin  /usr/local/bin  ~/bin
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/feynman <<'EOF'
+#!/bin/sh
+set -eu
+exec node "/absolute/path/to/feynman/bin/feynman.js" "$@"
+EOF
+chmod +x ~/.local/bin/feynman
+```
+
+Replace `/absolute/path/to/feynman` with the actual path where you cloned the repo
+(e.g. `/Users/yourname/projects/feynman`).
+
+If `~/.local/bin` is not on your PATH, add this to your shell profile (`~/.zshrc`, `~/.bashrc`, etc.):
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+### Overriding an existing feynman installation
+
+If you already have feynman installed (e.g. from the upstream binary installer), the
+wrapper above will override it as long as your PATH lists `~/.local/bin` before the
+directory that contains the old binary. Verify with:
+
+```bash
+which feynman        # should show ~/.local/bin/feynman
+feynman --version    # should match the version in package.json
+```
+
+### Updating the fork
+
+```bash
+cd ~/projects/feynman
+git pull
+npm install          # pick up any new/changed dependencies
+npm run build        # rebuild from source
+```
+
+No wrapper changes are needed — the wrapper always delegates to the built source in place.
+
+---
+
 ## Upstream Remote Setup
 
 Add the upstream remote (one-time setup):
