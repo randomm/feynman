@@ -2,6 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
+function createMockPi() {
+	const tools = new Map<string, any>();
+	const pi = {
+		registerTool: (config: any) => tools.set(config.name, config),
+	} as unknown as ExtensionAPI;
+	return { pi, getTool: (name: string) => tools.get(name) };
+}
+
 test("parallel-search module exports registerParallelTools function", async () => {
 	const parallelModule = await import("../extensions/parallel-search/parallel.js");
 	assert.strictEqual(typeof parallelModule.registerParallelTools, "function");
@@ -27,17 +35,10 @@ test("parallel-search registers three tools", async () => {
 
 test("parallel_search tool has correct configuration", async () => {
 	const parallelModule = await import("../extensions/parallel-search/parallel.js");
-	let toolConfig: any = null;
-
-	const pi = {
-		registerTool: (config: any) => {
-			if (config.name === "parallel_search") {
-				toolConfig = config;
-			}
-		},
-	} as unknown as ExtensionAPI;
+	const { pi, getTool } = createMockPi();
 
 	parallelModule.registerParallelTools(pi);
+	const toolConfig = getTool("parallel_search");
 
 	assert.ok(toolConfig);
 	assert.strictEqual(toolConfig.label, "Parallel Search");
@@ -49,17 +50,10 @@ test("parallel_search tool has correct configuration", async () => {
 
 test("parallel_fetch tool has correct configuration", async () => {
 	const parallelModule = await import("../extensions/parallel-search/parallel.js");
-	let toolConfig: any = null;
-
-	const pi = {
-		registerTool: (config: any) => {
-			if (config.name === "parallel_fetch") {
-				toolConfig = config;
-			}
-		},
-	} as unknown as ExtensionAPI;
+	const { pi, getTool } = createMockPi();
 
 	parallelModule.registerParallelTools(pi);
+	const toolConfig = getTool("parallel_fetch");
 
 	assert.ok(toolConfig);
 	assert.strictEqual(toolConfig.label, "Parallel Fetch");
@@ -76,17 +70,10 @@ test("parallel_fetch tool has correct configuration", async () => {
 
 test("parallel_research tool has correct configuration", async () => {
 	const parallelModule = await import("../extensions/parallel-search/parallel.js");
-	let toolConfig: any = null;
-
-	const pi = {
-		registerTool: (config: any) => {
-			if (config.name === "parallel_research") {
-				toolConfig = config;
-			}
-		},
-	} as unknown as ExtensionAPI;
+	const { pi, getTool } = createMockPi();
 
 	parallelModule.registerParallelTools(pi);
+	const toolConfig = getTool("parallel_research");
 
 	assert.ok(toolConfig);
 	assert.strictEqual(toolConfig.label, "Parallel Research");
@@ -97,104 +84,87 @@ test("parallel_research tool has correct configuration", async () => {
 
 test("parallel_search tool has execute function", async () => {
 	const parallelModule = await import("../extensions/parallel-search/parallel.js");
-	let executeFn: any = null;
-
-	const pi = {
-		registerTool: (config: any) => {
-			if (config.name === "parallel_search") {
-				executeFn = config.execute;
-			}
-		},
-	} as unknown as ExtensionAPI;
+	const { pi, getTool } = createMockPi();
 
 	parallelModule.registerParallelTools(pi);
+	const tool = getTool("parallel_search");
 
-	assert.strictEqual(typeof executeFn, "function");
+	assert.strictEqual(typeof tool?.execute, "function");
 });
 
 test("parallel_fetch tool has execute function", async () => {
 	const parallelModule = await import("../extensions/parallel-search/parallel.js");
-	let executeFn: any = null;
-
-	const pi = {
-		registerTool: (config: any) => {
-			if (config.name === "parallel_fetch") {
-				executeFn = config.execute;
-			}
-		},
-	} as unknown as ExtensionAPI;
+	const { pi, getTool } = createMockPi();
 
 	parallelModule.registerParallelTools(pi);
+	const tool = getTool("parallel_fetch");
 
-	assert.strictEqual(typeof executeFn, "function");
+	assert.strictEqual(typeof tool?.execute, "function");
 });
 
 test("parallel_research tool has execute function", async () => {
 	const parallelModule = await import("../extensions/parallel-search/parallel.js");
-	let executeFn: any = null;
-
-	const pi = {
-		registerTool: (config: any) => {
-			if (config.name === "parallel_research") {
-				executeFn = config.execute;
-			}
-		},
-	} as unknown as ExtensionAPI;
+	const { pi, getTool } = createMockPi();
 
 	parallelModule.registerParallelTools(pi);
+	const tool = getTool("parallel_research");
 
-	assert.strictEqual(typeof executeFn, "function");
+	assert.strictEqual(typeof tool?.execute, "function");
 });
 
 test("parallel_search validates maxResults rejects invalid values", async () => {
 	const parallelModule = await import("../extensions/parallel-search/parallel.js");
-	let executeFn: any = null;
-
-	const pi = {
-		registerTool: (config: any) => {
-			if (config.name === "parallel_search") {
-				executeFn = config.execute;
-			}
-		},
-	} as unknown as ExtensionAPI;
+	const { pi, getTool } = createMockPi();
 
 	parallelModule.registerParallelTools(pi);
+	const tool = getTool("parallel_search");
 
 	await assert.rejects(
-		() => executeFn("id", { objective: "test", maxResults: -5 }),
+		() => tool?.execute("id", { objective: "test", maxResults: -5 }),
 		/maxResults must be a positive integer/,
 	);
 });
 
 test("parallel_search validates maxResults rejects zero", async () => {
 	const parallelModule = await import("../extensions/parallel-search/parallel.js");
-	let executeFn: any = null;
-	const pi = { registerTool: (config: any) => { if (config.name === "parallel_search") executeFn = config.execute; } } as unknown as ExtensionAPI;
+	const { pi, getTool } = createMockPi();
 	parallelModule.registerParallelTools(pi);
+	const tool = getTool("parallel_search");
 	await assert.rejects(
-		() => executeFn("id", { objective: "test", maxResults: 0 }),
+		() => tool?.execute("id", { objective: "test", maxResults: 0 }),
 		/maxResults must be a positive integer/,
 	);
 });
 
 test("parallel_search validates maxResults rejects NaN", async () => {
 	const parallelModule = await import("../extensions/parallel-search/parallel.js");
-	let executeFn: any = null;
-	const pi = { registerTool: (config: any) => { if (config.name === "parallel_search") executeFn = config.execute; } } as unknown as ExtensionAPI;
+	const { pi, getTool } = createMockPi();
 	parallelModule.registerParallelTools(pi);
+	const tool = getTool("parallel_search");
 	await assert.rejects(
-		() => executeFn("id", { objective: "test", maxResults: Number.NaN }),
+		() => tool?.execute("id", { objective: "test", maxResults: Number.NaN }),
 		/maxResults must be a positive integer/,
 	);
 });
 
 test("parallel_search validates maxResults rejects Infinity", async () => {
 	const parallelModule = await import("../extensions/parallel-search/parallel.js");
-	let executeFn: any = null;
-	const pi = { registerTool: (config: any) => { if (config.name === "parallel_search") executeFn = config.execute; } } as unknown as ExtensionAPI;
+	const { pi, getTool } = createMockPi();
 	parallelModule.registerParallelTools(pi);
+	const tool = getTool("parallel_search");
 	await assert.rejects(
-		() => executeFn("id", { objective: "test", maxResults: Infinity }),
+		() => tool?.execute("id", { objective: "test", maxResults: Infinity }),
+		/maxResults must be a positive integer/,
+	);
+});
+
+test("parallel_search validates maxResults rejects values over 1000", async () => {
+	const parallelModule = await import("../extensions/parallel-search/parallel.js");
+	const { pi, getTool } = createMockPi();
+	parallelModule.registerParallelTools(pi);
+	const tool = getTool("parallel_search");
+	await assert.rejects(
+		() => tool?.execute("id", { objective: "test", maxResults: 9999 }),
 		/maxResults must be a positive integer/,
 	);
 });

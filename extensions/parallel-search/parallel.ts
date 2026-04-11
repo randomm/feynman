@@ -12,7 +12,10 @@ function formatText(value: unknown): string {
 
 async function runParallelCli(args: string[]): Promise<unknown> {
 	try {
-		const { stdout } = await execFileAsync("parallel-cli", args);
+		const { stdout } = await execFileAsync("parallel-cli", args, {
+			timeout: 300_000, // 5 minute absolute maximum
+			maxBuffer: 50 * 1024 * 1024, // 50 MB stdout buffer limit
+		});
 
 		let parsed: unknown;
 		try {
@@ -77,8 +80,8 @@ export function registerParallelTools(pi: ExtensionAPI): void {
 				args.push("--mode", params.mode);
 			}
 			if (params.maxResults !== undefined) {
-				const n = Math.floor(Number(params.maxResults));
-				if (!Number.isFinite(n) || n < 1) throw new Error("maxResults must be a positive integer");
+				const n = Math.floor(params.maxResults);
+				if (!Number.isFinite(n) || n < 1 || n > 1000) throw new Error("maxResults must be a positive integer no greater than 1000");
 				args.push("--max-results", String(n));
 			}
 			if (params.afterDate) {
