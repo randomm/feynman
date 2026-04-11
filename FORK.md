@@ -134,6 +134,22 @@ git merge upstream/main
 
 ---
 
+### researcher subagent: parallel tools access + subagent discovery fix
+
+- **Issue**: #3 (follow-on)
+- **Status**: active
+- **Based on upstream**: v0.2.17
+- **Files touched**:
+  - `.feynman/agents/researcher.md` (modified — adds parallel tools to frontmatter allowlist)
+  - `.feynman/settings.json` (modified — removes npm:pi-subagents to restore local agent discovery)
+- **Purpose**: Enables researcher subagent to actually call parallel_search/fetch/research tools at runtime. Restores verifier/reviewer/writer subagents which were hidden by the pi-subagents npm package.
+- **Merge risk**:
+  - `.feynman/agents/researcher.md` — **MEDIUM** (upstream may update frontmatter; check tools list at sync time)
+  - `.feynman/settings.json` — **HIGH** (upstream actively manages this package list; expect conflicts at every sync — always keep `npm:pi-subagents` removed after merge)
+- **Conflict notes**: At upstream sync time, `.feynman/settings.json` will likely re-add `npm:pi-subagents`. Always remove it after merging upstream. Consider adding a comment near the packages list in settings.json if the format allows it.
+
+---
+
 ### Fork divergence manifest and sync process
 
 - **Issue**: #2
