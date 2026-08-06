@@ -5,7 +5,7 @@ description: Explain research, papers, or technical ideas in plain English with 
 
 # ELI5
 
-Use `alpha` first when the user names a specific paper, arXiv id, DOI, or paper URL.
+Use Feynman's alpha tools first when the user names a specific paper, arXiv id, DOI, or paper URL. In shell, call `feynman alpha ...`, not a bare global `alpha` binary.
 
 If the user gives only a topic, identify 1-3 representative papers and anchor the explanation around the clearest or most important one.
 

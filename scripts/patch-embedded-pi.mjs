@@ -1,14 +1,45 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FEYNMAN_LOGO_HTML } from "../logo.mjs";
+import { patchAlphaHubAuthSource } from "./lib/alpha-hub-auth-patch.mjs";
+import { patchAlphaHubSearchResultsSource, patchAlphaHubSearchSource } from "./lib/alpha-hub-search-patch.mjs";
+import { patchMcpSdkPackageJsonSource } from "./lib/mcp-sdk-package-patch.mjs";
+import { patchPiAgentCoreSource } from "./lib/pi-agent-core-patch.mjs";
+import {
+	assertPiRuntimeCorrectnessVersion,
+	PI_RUNTIME_CORRECTNESS_REQUIRED_VERSION,
+	patchPiAgentSessionSource,
+	patchPiSessionManagerSource,
+	patchPiTransformMessagesSource,
+} from "./lib/pi-runtime-correctness-patch.mjs";
+import { patchPiLlamaUsageSource } from "./lib/pi-llama-usage-patch.mjs";
 import { patchPiExtensionLoaderSource } from "./lib/pi-extension-loader-patch.mjs";
-import { patchPiGoogleLegacySchemaSource } from "./lib/pi-google-legacy-schema-patch.mjs";
-import { PI_WEB_ACCESS_PATCH_TARGETS, patchPiWebAccessSource } from "./lib/pi-web-access-patch.mjs";
-import { PI_SUBAGENTS_PATCH_TARGETS, patchPiSubagentsSource } from "./lib/pi-subagents-patch.mjs";
+import { resolveAdjacentNpmCommand } from "./lib/npm-command.mjs";
+import { patchPiModelRegistrySource } from "./lib/pi-model-registry-patch.mjs";
+import { patchPiUndiciProxyTree } from "./lib/pi-undici-proxy-patch.mjs";
+import { patchPiBraceExpansionTree } from "./lib/pi-shrinkwrap-security-patch.mjs";
+import {
+	patchPiEditorSource,
+	patchPiInteractiveThemeSource,
+	patchPiInteractiveUpdateNoticeSource,
+	patchPiTuiSource,
+} from "./lib/pi-tui-patch.mjs";
+import {
+	runtimeManifestPackagesMatch,
+	verifyFileSha256,
+} from "./lib/runtime-workspace-integrity.mjs";
+import {
+	assertPiWebAccessVersion,
+	PI_WEB_ACCESS_PATCH_TARGETS,
+	patchPiWebAccessSources,
+} from "./lib/pi-web-access-patch.mjs";
+import { PI_SUBAGENTS_PATCH_TARGETS, patchPiSubagentsSource, stripPiSubagentBuiltinModelSource } from "./lib/pi-subagents-patch.mjs";
+import { PI_OTEL_PATCH_TARGETS, patchPiOtelSource } from "./lib/pi-otel-patch.mjs";
+import { patchPiSessionSearchSource } from "./lib/pi-session-search-patch.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, "..");
@@ -48,9 +79,32 @@ function findPackageRoot(packageName) {
 	return null;
 }
 
-const piPackageRoot = findPackageRoot("@mariozechner/pi-coding-agent");
-const piTuiRoot = findPackageRoot("@mariozechner/pi-tui");
-const piAiRoot = findPackageRoot("@mariozechner/pi-ai");
+function findPiPackageRoot(packageName) {
+	return findPackageRoot(`@earendil-works/${packageName}`) ?? findPackageRoot(`@mariozechner/${packageName}`);
+}
+
+const piPackageRoot = findPiPackageRoot("pi-coding-agent");
+const piAgentCoreRoot = findPiPackageRoot("pi-agent-core");
+const piTuiRoot = findPiPackageRoot("pi-tui");
+const piAiRoot = findPiPackageRoot("pi-ai");
+const PI_SCOPES = ["@earendil-works", "@mariozechner"];
+
+function resolveNestedPiFiles(parentRoot, nestedPackageName, ...segments) {
+	if (!parentRoot) return [];
+	return PI_SCOPES.map((scope) =>
+		resolve(parentRoot, "node_modules", scope, nestedPackageName, ...segments)
+	);
+}
+
+function resolveWorkspaceNestedPiFiles(workspaceRoot, nestedPackageName, ...segments) {
+	return PI_SCOPES.flatMap((codingScope) =>
+		resolveNestedPiFiles(
+			resolve(workspaceRoot, codingScope, "pi-coding-agent"),
+			nestedPackageName,
+			...segments,
+		)
+	);
+}
 
 if (!piPackageRoot) {
 	console.warn("[feynman] pi-coding-agent not found, skipping Pi patches");
@@ -62,12 +116,117 @@ const bunCliPath = piPackageRoot ? resolve(piPackageRoot, "dist", "bun", "cli.js
 const interactiveModePath = piPackageRoot ? resolve(piPackageRoot, "dist", "modes", "interactive", "interactive-mode.js") : null;
 const interactiveThemePath = piPackageRoot ? resolve(piPackageRoot, "dist", "modes", "interactive", "theme", "theme.js") : null;
 const extensionLoaderPath = piPackageRoot ? resolve(piPackageRoot, "dist", "core", "extensions", "loader.js") : null;
+const modelRegistryPath = piPackageRoot ? resolve(piPackageRoot, "dist", "core", "model-registry.js") : null;
+const modelRuntimePath = piPackageRoot ? resolve(piPackageRoot, "dist", "core", "model-runtime.js") : null;
+const agentSessionPath = piPackageRoot ? resolve(piPackageRoot, "dist", "core", "agent-session.js") : null;
+const sessionManagerPath = piPackageRoot ? resolve(piPackageRoot, "dist", "core", "session-manager.js") : null;
+const llamaProviderPath = piPackageRoot
+	? resolve(piPackageRoot, "dist", "extensions", "llama", "provider.js")
+	: null;
+const transformMessagesPath = piAiRoot ? resolve(piAiRoot, "dist", "api", "transform-messages.js") : null;
+const nestedTransformMessagesPaths = piPackageRoot
+	? resolveNestedPiFiles(piPackageRoot, "pi-ai", "dist", "api", "transform-messages.js")
+	: [];
+const agentLoopPath = piAgentCoreRoot ? resolve(piAgentCoreRoot, "dist", "agent-loop.js") : null;
+const nestedAgentLoopPaths = resolveNestedPiFiles(piPackageRoot, "pi-agent-core", "dist", "agent-loop.js");
+const tuiPath = piTuiRoot ? resolve(piTuiRoot, "dist", "tui.js") : null;
 const terminalPath = piTuiRoot ? resolve(piTuiRoot, "dist", "terminal.js") : null;
 const editorPath = piTuiRoot ? resolve(piTuiRoot, "dist", "components", "editor.js") : null;
+const nestedTuiPaths = resolveNestedPiFiles(piPackageRoot, "pi-tui", "dist", "tui.js");
+const nestedEditorPaths = resolveNestedPiFiles(piPackageRoot, "pi-tui", "dist", "components", "editor.js");
 const workspaceRoot = resolve(appRoot, ".feynman", "npm", "node_modules");
-const workspaceExtensionLoaderPath = resolve(
+function resolveWorkspacePiFile(packageName, ...segments) {
+	const candidates = [
+		resolve(workspaceRoot, "@earendil-works", packageName, ...segments),
+		resolve(workspaceRoot, "@mariozechner", packageName, ...segments),
+	];
+	return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
+}
+
+const workspaceAgentLoopPath = resolveWorkspacePiFile("pi-agent-core", "dist", "agent-loop.js");
+const workspaceNestedAgentLoopPaths = resolveWorkspaceNestedPiFiles(
 	workspaceRoot,
-	"@mariozechner",
+	"pi-agent-core",
+	"dist",
+	"agent-loop.js",
+);
+const workspaceAgentSessionPath = resolveWorkspacePiFile("pi-coding-agent", "dist", "core", "agent-session.js");
+const workspaceSessionManagerPath = resolveWorkspacePiFile("pi-coding-agent", "dist", "core", "session-manager.js");
+const workspaceLlamaProviderPath = resolveWorkspacePiFile(
+	"pi-coding-agent",
+	"dist",
+	"extensions",
+	"llama",
+	"provider.js",
+);
+const workspaceTransformMessagesPath = resolveWorkspacePiFile("pi-ai", "dist", "api", "transform-messages.js");
+const workspaceNestedTransformMessagesPaths = resolveWorkspaceNestedPiFiles(
+	workspaceRoot,
+	"pi-ai",
+	"dist",
+	"api",
+	"transform-messages.js",
+);
+
+function assertPiPackageVersion(packageRoot, surface) {
+	if (!packageRoot || !existsSync(resolve(packageRoot, "package.json"))) return;
+	const version = JSON.parse(readFileSync(resolve(packageRoot, "package.json"), "utf8")).version;
+	assertPiRuntimeCorrectnessVersion(version, surface);
+}
+
+function shouldPatchPiRuntimeCorrectnessFile(entryPath) {
+	let current = dirname(entryPath);
+	while (current !== dirname(current)) {
+		const manifestPath = resolve(current, "package.json");
+		if (existsSync(manifestPath)) {
+			const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+			if (
+				typeof manifest.name === "string" &&
+				(manifest.name.endsWith("/pi-coding-agent") || manifest.name.endsWith("/pi-ai"))
+			) {
+				return manifest.version === PI_RUNTIME_CORRECTNESS_REQUIRED_VERSION;
+			}
+		}
+		current = dirname(current);
+	}
+	return false;
+}
+
+assertPiPackageVersion(piPackageRoot, "bundled pi-coding-agent");
+assertPiPackageVersion(piAgentCoreRoot, "bundled pi-agent-core");
+assertPiPackageVersion(piAiRoot, "bundled pi-ai");
+assertPiPackageVersion(piTuiRoot, "bundled pi-tui");
+for (const entryPath of nestedAgentLoopPaths) {
+	assertPiPackageVersion(resolve(entryPath, "..", ".."), "bundled nested pi-agent-core");
+}
+for (const entryPath of nestedTransformMessagesPaths) {
+	assertPiPackageVersion(resolve(entryPath, "..", "..", ".."), "bundled nested pi-ai");
+}
+for (const entryPath of nestedTuiPaths) {
+	assertPiPackageVersion(resolve(entryPath, "..", ".."), "bundled nested pi-tui");
+}
+const workspaceTuiPath = resolveWorkspacePiFile("pi-tui", "dist", "tui.js");
+const workspaceEditorPath = resolveWorkspacePiFile("pi-tui", "dist", "components", "editor.js");
+const workspaceNestedTuiPaths = resolveWorkspaceNestedPiFiles(workspaceRoot, "pi-tui", "dist", "tui.js");
+const workspaceNestedEditorPaths = workspaceNestedTuiPaths.map((entryPath) =>
+	resolve(entryPath, "..", "components", "editor.js")
+);
+const workspaceInteractiveModePath = resolveWorkspacePiFile(
+	"pi-coding-agent",
+	"dist",
+	"modes",
+	"interactive",
+	"interactive-mode.js",
+);
+const workspaceInteractiveThemePath = resolveWorkspacePiFile(
+	"pi-coding-agent",
+	"dist",
+	"modes",
+	"interactive",
+	"theme",
+	"theme.js",
+);
+const workspaceExtensionLoaderPath = resolveWorkspacePiFile(
 	"pi-coding-agent",
 	"dist",
 	"core",
@@ -75,7 +234,7 @@ const workspaceExtensionLoaderPath = resolve(
 	"loader.js",
 );
 const piSubagentsRoot = resolve(workspaceRoot, "pi-subagents");
-const webAccessPath = resolve(workspaceRoot, "pi-web-access", "index.ts");
+const piOtelRoot = resolve(workspaceRoot, "pi-otel");
 const sessionSearchIndexerPath = resolve(
 	workspaceRoot,
 	"@kaiserlich-dev",
@@ -87,7 +246,55 @@ const piMemoryPath = resolve(workspaceRoot, "@samfp", "pi-memory", "src", "index
 const settingsPath = resolve(appRoot, ".feynman", "settings.json");
 const workspaceDir = resolve(appRoot, ".feynman", "npm");
 const workspacePackageJsonPath = resolve(workspaceDir, "package.json");
+const workspaceManifestPath = resolve(workspaceDir, ".runtime-manifest.json");
 const workspaceArchivePath = resolve(appRoot, ".feynman", "runtime-workspace.tgz");
+const workspaceArchiveDigestPath = resolve(appRoot, ".feynman", "runtime-workspace.sha256");
+const workspaceNpmConfigPath = resolve(workspaceDir, ".npmrc");
+const workspaceSetupLockDir = resolve(appRoot, ".feynman", ".workspace-setup.lock");
+const globalNodeModulesRoot = resolve(feynmanNpmPrefix, "lib", "node_modules");
+const PRUNE_VERSION = 8;
+const WORKSPACE_SETUP_LOCK_STALE_MS = 300000;
+const NATIVE_PACKAGE_SPECS = new Set([
+	"@kaiserlich-dev/pi-session-search",
+]);
+
+function patchMcpSdkManifest(nodeModulesRoot) {
+	const manifestPath = resolve(
+		nodeModulesRoot,
+		"@modelcontextprotocol",
+		"sdk",
+		"package.json",
+	);
+	if (!existsSync(manifestPath)) return;
+	const source = readFileSync(manifestPath, "utf8");
+	const patched = patchMcpSdkPackageJsonSource(source);
+	if (patched !== source) {
+		writeFileSync(manifestPath, patched, "utf8");
+	}
+}
+
+function patchFilesIfPresent(entryPaths, patchSource) {
+	for (const entryPath of entryPaths.filter(Boolean)) {
+		if (!existsSync(entryPath)) continue;
+		const source = readFileSync(entryPath, "utf8");
+		const patched = patchSource(source);
+		if (patched !== source) {
+			writeFileSync(entryPath, patched, "utf8");
+		}
+	}
+}
+const FILTERED_INSTALL_OUTPUT_PATTERNS = [
+	/npm warn deprecated node-domexception@1\.0\.0/i,
+	/npm notice/i,
+	/^(added|removed|changed) \d+ packages?( in .+)?$/i,
+	/^\d+ packages are looking for funding$/i,
+	/^run `npm fund` for details$/i,
+];
+
+function supportsNativePackageSources(version = process.versions.node) {
+	const [major = "0"] = version.replace(/^v/, "").split(".");
+	return (Number.parseInt(major, 10) || 0) <= 22;
+}
 
 function createInstallCommand(packageManager, packageSpecs) {
 	switch (packageManager) {
@@ -99,6 +306,7 @@ function createInstallCommand(packageManager, packageSpecs) {
 				"--prefer-offline",
 				"--no-audit",
 				"--no-fund",
+				"--legacy-peer-deps",
 				"--loglevel",
 				"error",
 				...packageSpecs,
@@ -130,6 +338,18 @@ function resolvePackageManager() {
 	return null;
 }
 
+function resolvePackageManagerInvocation(packageManager) {
+	if (packageManager === "npm") {
+		const adjacent = resolveAdjacentNpmCommand();
+		if (adjacent) return adjacent;
+	}
+	const resolved = resolveExecutable(packageManager);
+	if (!resolved) return null;
+	// Windows cannot spawn .cmd/.bat shims without a shell (EINVAL).
+	const needsShell = process.platform === "win32" && /\.(cmd|bat)$/i.test(resolved);
+	return { command: resolved, args: [], shell: needsShell };
+}
+
 function installWorkspacePackages(packageSpecs) {
 	const packageManager = resolvePackageManager();
 	if (!packageManager) {
@@ -139,14 +359,34 @@ function installWorkspacePackages(packageSpecs) {
 		return false;
 	}
 
-	const result = spawnSync(packageManager, createInstallCommand(packageManager, packageSpecs), {
+	const invocation = resolvePackageManagerInvocation(packageManager);
+	if (!invocation) {
+		process.stderr.write(`[feynman] could not resolve ${packageManager} executable for bundled package setup.\n`);
+		return false;
+	}
+	const result = spawnSync(invocation.command, [...invocation.args, ...createInstallCommand(packageManager, packageSpecs)], {
 		cwd: workspaceDir,
-		stdio: ["ignore", "ignore", "pipe"],
+		shell: invocation.shell,
+		stdio: ["ignore", "pipe", "pipe"],
 		timeout: 300000,
+		env: {
+			...process.env,
+			PATH: getPathWithCurrentNode(process.env.PATH),
+			npm_config_userconfig: workspaceNpmConfigPath,
+			NPM_CONFIG_USERCONFIG: workspaceNpmConfigPath,
+		},
 	});
 
+	for (const stream of [result.stdout, result.stderr]) {
+		if (!stream?.length) continue;
+		for (const line of stream.toString().split(/\r?\n/)) {
+			if (!line.trim()) continue;
+			if (FILTERED_INSTALL_OUTPUT_PATTERNS.some((pattern) => pattern.test(line.trim()))) continue;
+			process.stderr.write(`${line}\n`);
+		}
+	}
+
 	if (result.status !== 0) {
-		if (result.stderr?.length) process.stderr.write(result.stderr);
 		process.stderr.write(`[feynman] ${packageManager} failed while setting up bundled packages.\n`);
 		return false;
 	}
@@ -159,13 +399,193 @@ function parsePackageName(spec) {
 	return match?.[1] ?? spec;
 }
 
+function filterUnsupportedPackageSpecs(packageSpecs) {
+	if (supportsNativePackageSources()) return packageSpecs;
+	return packageSpecs.filter((spec) => !NATIVE_PACKAGE_SPECS.has(parsePackageName(spec)));
+}
+
+function workspaceMatchesRuntime(packageSpecs) {
+	if (!existsSync(workspaceManifestPath)) return false;
+
+	try {
+		const manifest = JSON.parse(readFileSync(workspaceManifestPath, "utf8"));
+		if (!Array.isArray(manifest.packageSpecs)) {
+			return false;
+		}
+		const manifestPackageSpecs = filterUnsupportedPackageSpecs(manifest.packageSpecs);
+		if (!runtimeManifestPackagesMatch(workspaceRoot, manifestPackageSpecs, packageSpecs)) {
+			return false;
+		}
+		if (!supportsNativePackageSources()) {
+			return true;
+		}
+		if (
+			manifest.nodeAbi !== process.versions.modules ||
+			manifest.platform !== process.platform ||
+			manifest.arch !== process.arch ||
+			manifest.pruneVersion !== PRUNE_VERSION
+		) {
+			return false;
+		}
+
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function writeWorkspaceManifest(packageSpecs) {
+	writeFileSync(
+		workspaceManifestPath,
+		JSON.stringify(
+			{
+				packageSpecs,
+				generatedAt: new Date().toISOString(),
+				nodeAbi: process.versions.modules,
+				nodeVersion: process.version,
+				platform: process.platform,
+				arch: process.arch,
+				pruneVersion: PRUNE_VERSION,
+			},
+			null,
+			2,
+		) + "\n",
+		"utf8",
+	);
+}
+
+function ensureParentDir(path) {
+	mkdirSync(dirname(path), { recursive: true });
+}
+
+function packageDependencyExists(packagePath, globalNodeModulesRoot, dependency) {
+	return existsSync(resolve(packagePath, "node_modules", dependency)) ||
+		existsSync(resolve(globalNodeModulesRoot, dependency));
+}
+
+function installedPackageLooksUsable(packagePath, globalNodeModulesRoot) {
+	if (!existsSync(resolve(packagePath, "package.json"))) return false;
+	try {
+		const pkg = JSON.parse(readFileSync(resolve(packagePath, "package.json"), "utf8"));
+		return Object.keys(pkg.dependencies ?? {}).every((dependency) =>
+			packageDependencyExists(packagePath, globalNodeModulesRoot, dependency)
+		);
+	} catch {
+		return false;
+	}
+}
+
+function linkPointsTo(linkPath, targetPath) {
+	try {
+		if (!lstatSync(linkPath).isSymbolicLink()) return false;
+		return resolve(dirname(linkPath), readlinkSync(linkPath)) === targetPath;
+	} catch {
+		return false;
+	}
+}
+
+function pathInsideRoot(path, root) {
+	const relativePath = relative(root, path);
+	return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+function listWorkspacePackageNames(root) {
+	if (!existsSync(root)) return [];
+	const names = [];
+	for (const entry of readdirSync(root, { withFileTypes: true })) {
+		if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+		if (entry.name.startsWith(".")) continue;
+		if (entry.name.startsWith("@")) {
+			const scopeRoot = resolve(root, entry.name);
+			for (const scopedEntry of readdirSync(scopeRoot, { withFileTypes: true })) {
+				if (!scopedEntry.isDirectory() && !scopedEntry.isSymbolicLink()) continue;
+				names.push(`${entry.name}/${scopedEntry.name}`);
+			}
+			continue;
+		}
+		names.push(entry.name);
+	}
+	return names;
+}
+
+function removeEmptyScopeDirectory(packagePath, packageName) {
+	if (!packageName.startsWith("@")) return;
+
+	const scopePath = dirname(packagePath);
+	if (!pathInsideRoot(scopePath, globalNodeModulesRoot) || !existsSync(scopePath)) return;
+	if (readdirSync(scopePath).length > 0) return;
+
+	rmSync(scopePath, { recursive: true, force: true });
+}
+
+function pruneStaleBundledPackageLinks(currentPackageNames) {
+	if (!existsSync(globalNodeModulesRoot)) return;
+
+	const currentPackages = new Set(currentPackageNames);
+	for (const packageName of listWorkspacePackageNames(globalNodeModulesRoot)) {
+		const packagePath = resolve(globalNodeModulesRoot, packageName);
+		let linkedTarget;
+		try {
+			if (!lstatSync(packagePath).isSymbolicLink()) continue;
+			linkedTarget = resolve(dirname(packagePath), readlinkSync(packagePath));
+		} catch {
+			continue;
+		}
+		if (!pathInsideRoot(linkedTarget, workspaceRoot)) continue;
+		if (currentPackages.has(packageName) && existsSync(linkedTarget)) continue;
+
+		rmSync(packagePath, { force: true });
+		removeEmptyScopeDirectory(packagePath, packageName);
+	}
+}
+
+function linkBundledPackage(packageName) {
+	const sourcePath = resolve(workspaceRoot, packageName);
+	const targetPath = resolve(globalNodeModulesRoot, packageName);
+	if (!existsSync(sourcePath)) return false;
+	if (linkPointsTo(targetPath, sourcePath)) return false;
+	try {
+		if (lstatSync(targetPath).isSymbolicLink()) {
+			rmSync(targetPath, { force: true });
+		} else if (!installedPackageLooksUsable(targetPath, globalNodeModulesRoot)) {
+			rmSync(targetPath, { recursive: true, force: true });
+		}
+	} catch {}
+	if (existsSync(targetPath)) return false;
+
+	ensureParentDir(targetPath);
+	try {
+		symlinkSync(sourcePath, targetPath, process.platform === "win32" ? "junction" : "dir");
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function ensureBundledPackageLinks(packageSpecs) {
+	if (!workspaceMatchesRuntime(packageSpecs)) return;
+
+	const packageNames = listWorkspacePackageNames(workspaceRoot);
+	pruneStaleBundledPackageLinks(packageNames);
+	for (const packageName of packageNames) {
+		linkBundledPackage(packageName);
+	}
+}
+
 function restorePackagedWorkspace(packageSpecs) {
 	if (!existsSync(workspaceArchivePath)) return false;
+	if (!verifyFileSha256(workspaceArchivePath, workspaceArchiveDigestPath)) {
+		throw new Error("Bundled runtime archive failed its SHA-256 integrity check");
+	}
 
 	rmSync(workspaceDir, { recursive: true, force: true });
 	mkdirSync(resolve(appRoot, ".feynman"), { recursive: true });
 
-	const result = spawnSync("tar", ["-xzf", workspaceArchivePath, "-C", resolve(appRoot, ".feynman")], {
+	// Run tar from .feynman with relative paths: GNU tar (Git for Windows)
+	// treats absolute paths with a drive-letter colon ("C:\...") as remote
+	// host specs and fails with "Cannot connect ... resolve failed".
+	const result = spawnSync("tar", ["-xzf", "runtime-workspace.tgz", "-C", "."], {
+		cwd: resolve(appRoot, ".feynman"),
 		stdio: ["ignore", "ignore", "pipe"],
 		timeout: 300000,
 	});
@@ -184,24 +604,26 @@ function restorePackagedWorkspace(packageSpecs) {
 	return false;
 }
 
-function refreshPackagedWorkspace(packageSpecs) {
-	return installWorkspacePackages(packageSpecs);
-}
-
 function resolveExecutable(name, fallbackPaths = []) {
 	for (const candidate of fallbackPaths) {
 		if (existsSync(candidate)) return candidate;
 	}
 
 	const isWindows = process.platform === "win32";
+	const env = {
+		...process.env,
+		PATH: process.env.PATH ?? "",
+	};
 	const result = isWindows
 		? spawnSync("cmd", ["/c", `where ${name}`], {
 				encoding: "utf8",
 				stdio: ["ignore", "pipe", "ignore"],
+				env,
 			})
-		: spawnSync("sh", ["-lc", `command -v ${name}`], {
+		: spawnSync("sh", ["-c", `command -v ${name}`], {
 				encoding: "utf8",
 				stdio: ["ignore", "pipe", "ignore"],
+				env,
 			});
 	if (result.status === 0) {
 		const resolved = result.stdout.trim().split(/\r?\n/)[0];
@@ -210,19 +632,73 @@ function resolveExecutable(name, fallbackPaths = []) {
 	return null;
 }
 
+function getPathWithCurrentNode(pathValue = process.env.PATH ?? "") {
+	const nodeDir = dirname(process.execPath);
+	const parts = pathValue.split(delimiter).filter(Boolean);
+	return parts.includes(nodeDir) ? pathValue : `${nodeDir}${delimiter}${pathValue}`;
+}
+
+function sleepSync(ms) {
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function acquireWorkspaceSetupLock() {
+	mkdirSync(dirname(workspaceSetupLockDir), { recursive: true });
+	const startedAt = Date.now();
+
+	while (true) {
+		try {
+			mkdirSync(workspaceSetupLockDir);
+			writeFileSync(resolve(workspaceSetupLockDir, "owner"), `${process.pid}\n${new Date().toISOString()}\n`, "utf8");
+			return;
+		} catch (error) {
+			if (error?.code !== "EEXIST") throw error;
+			try {
+				if (Date.now() - statSync(workspaceSetupLockDir).mtimeMs > WORKSPACE_SETUP_LOCK_STALE_MS) {
+					rmSync(workspaceSetupLockDir, { recursive: true, force: true });
+					continue;
+				}
+			} catch {}
+			if (Date.now() - startedAt > WORKSPACE_SETUP_LOCK_STALE_MS) {
+				throw new Error("Timed out waiting for another Feynman process to finish package setup.");
+			}
+			sleepSync(100);
+		}
+	}
+}
+
+function releaseWorkspaceSetupLock() {
+	rmSync(workspaceSetupLockDir, { recursive: true, force: true });
+}
+
 function ensurePackageWorkspace() {
 	if (!existsSync(settingsPath)) return;
+	acquireWorkspaceSetupLock();
+	try {
+		ensurePackageWorkspaceUnlocked();
+	} finally {
+		releaseWorkspaceSetupLock();
+	}
+}
 
+function ensurePackageWorkspaceUnlocked() {
 	const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
 	const packageSpecs = Array.isArray(settings.packages)
 		? settings.packages
 				.filter((v) => typeof v === "string" && v.startsWith("npm:"))
 				.map((v) => v.slice(4))
 		: [];
+	const supportedPackageSpecs = filterUnsupportedPackageSpecs(packageSpecs);
 
-	if (packageSpecs.length === 0) return;
-	if (existsSync(resolve(workspaceRoot, parsePackageName(packageSpecs[0])))) return;
-	if (restorePackagedWorkspace(packageSpecs) && refreshPackagedWorkspace(packageSpecs)) return;
+	if (supportedPackageSpecs.length === 0) return;
+	if (workspaceMatchesRuntime(supportedPackageSpecs)) {
+		ensureBundledPackageLinks(supportedPackageSpecs);
+		return;
+	}
+	if (restorePackagedWorkspace(packageSpecs) && workspaceMatchesRuntime(supportedPackageSpecs)) {
+		ensureBundledPackageLinks(supportedPackageSpecs);
+		return;
+	}
 
 	mkdirSync(workspaceDir, { recursive: true });
 	writeFileSync(
@@ -239,7 +715,7 @@ function ensurePackageWorkspace() {
 		process.stderr.write(`\r${frames[frame++ % frames.length]} setting up feynman... ${elapsed}s`);
 	}, 80);
 
-	const result = installWorkspacePackages(packageSpecs);
+	const result = installWorkspacePackages(supportedPackageSpecs);
 
 	clearInterval(spinner);
 	const elapsed = Math.round((Date.now() - start) / 1000);
@@ -247,7 +723,9 @@ function ensurePackageWorkspace() {
 	if (!result) {
 		process.stderr.write(`\r✗ setup failed (${elapsed}s)\n`);
 	} else {
-		process.stderr.write(`\r✓ feynman ready (${elapsed}s)\n`);
+		process.stderr.write("\r\x1b[2K");
+		writeWorkspaceManifest(supportedPackageSpecs);
+		ensureBundledPackageLinks(supportedPackageSpecs);
 	}
 }
 
@@ -274,13 +752,62 @@ function ensurePandoc() {
 
 ensurePandoc();
 
-if (existsSync(piSubagentsRoot)) {
+const globalPiSubagentsRoot = resolve(globalNodeModulesRoot, "pi-subagents");
+const agentNpmPiSubagentsRoot = resolve(feynmanHome, "agent", "npm", "node_modules", "pi-subagents");
+for (const subagentsRoot of new Set(
+	[piSubagentsRoot, globalPiSubagentsRoot, agentNpmPiSubagentsRoot]
+		.filter((root) => existsSync(root))
+		.map((root) => {
+			try {
+				return realpathSync(root);
+			} catch {
+				return root;
+			}
+		}),
+)) {
 	for (const relativePath of PI_SUBAGENTS_PATCH_TARGETS) {
-		const entryPath = resolve(piSubagentsRoot, relativePath);
+		const entryPath = resolve(subagentsRoot, relativePath);
 		if (!existsSync(entryPath)) continue;
 
 		const source = readFileSync(entryPath, "utf8");
 		const patched = patchPiSubagentsSource(relativePath, source);
+		if (patched !== source) {
+			writeFileSync(entryPath, patched, "utf8");
+		}
+	}
+
+	const builtinAgentsRoot = resolve(piSubagentsRoot, "agents");
+	if (existsSync(builtinAgentsRoot)) {
+		for (const entry of readdirSync(builtinAgentsRoot, { withFileTypes: true })) {
+			if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+			const entryPath = resolve(builtinAgentsRoot, entry.name);
+			const source = readFileSync(entryPath, "utf8");
+			const patched = stripPiSubagentBuiltinModelSource(source);
+			if (patched !== source) {
+				writeFileSync(entryPath, patched, "utf8");
+			}
+		}
+	}
+}
+
+const globalPiOtelRoot = resolve(globalNodeModulesRoot, "pi-otel");
+const agentNpmPiOtelRoot = resolve(feynmanHome, "agent", "npm", "node_modules", "pi-otel");
+for (const otelRoot of new Set(
+	[piOtelRoot, globalPiOtelRoot, agentNpmPiOtelRoot]
+		.filter((root) => existsSync(root))
+		.map((root) => {
+			try {
+				return realpathSync(root);
+			} catch {
+				return root;
+			}
+		}),
+)) {
+	for (const relativePath of PI_OTEL_PATCH_TARGETS) {
+		const entryPath = resolve(otelRoot, relativePath);
+		if (!existsSync(entryPath)) continue;
+		const source = readFileSync(entryPath, "utf8");
+		const patched = patchPiOtelSource(relativePath, source);
 		if (patched !== source) {
 			writeFileSync(entryPath, patched, "utf8");
 		}
@@ -331,7 +858,7 @@ for (const entryPath of [cliPath, bunCliPath].filter(Boolean)) {
 
 if (terminalPath && existsSync(terminalPath)) {
 	let terminalSource = readFileSync(terminalPath, "utf8");
-	if (!terminalSource.includes("stdinErrorHandler;")) {
+	if (!terminalSource.includes("stdinErrorHandler = (error) =>")) {
 		terminalSource = terminalSource.replace(
 			"    stdinBuffer;\n    stdinDataHandler;\n",
 			[
@@ -393,190 +920,125 @@ for (const loaderPath of [extensionLoaderPath, workspaceExtensionLoaderPath].fil
 	}
 }
 
-if (interactiveThemePath && existsSync(interactiveThemePath)) {
-	let themeSource = readFileSync(interactiveThemePath, "utf8");
-	const desiredGetEditorTheme = [
-		"export function getEditorTheme() {",
-		"    return {",
-		'        borderColor: (text) => " ".repeat(text.length),',
-		'        bgColor: (text) => theme.bg("userMessageBg", text),',
-		'        placeholderText: "Type your message or /help for commands",',
-		'        placeholder: (text) => theme.fg("dim", text),',
-		"        selectList: getSelectListTheme(),",
-		"    };",
-		"}",
-	].join("\n");
-	themeSource = themeSource.replace(
-		/export function getEditorTheme\(\) \{[\s\S]*?\n\}\nexport function getSettingsListTheme\(\) \{/m,
-		`${desiredGetEditorTheme}\nexport function getSettingsListTheme() {`,
-	);
-	writeFileSync(interactiveThemePath, themeSource, "utf8");
-}
 
-if (editorPath && existsSync(editorPath)) {
-	let editorSource = readFileSync(editorPath, "utf8");
-	const importOriginal =
-		'import { getSegmenter, isPunctuationChar, isWhitespaceChar, truncateToWidth, visibleWidth } from "../utils.js";';
-	const importReplacement =
-		'import { applyBackgroundToLine, getSegmenter, isPunctuationChar, isWhitespaceChar, truncateToWidth, visibleWidth } from "../utils.js";';
-	if (editorSource.includes(importOriginal)) {
-		editorSource = editorSource.replace(importOriginal, importReplacement);
-	}
-	const desiredRender = [
-		"    render(width) {",
-		"        const maxPadding = Math.max(0, Math.floor((width - 1) / 2));",
-		"        const paddingX = Math.min(this.paddingX, maxPadding);",
-		"        const contentWidth = Math.max(1, width - paddingX * 2);",
-		"        // Layout width: with padding the cursor can overflow into it,",
-		"        // without padding we reserve 1 column for the cursor.",
-		"        const layoutWidth = Math.max(1, contentWidth - (paddingX ? 0 : 1));",
-		"        // Store for cursor navigation (must match wrapping width)",
-		"        this.lastWidth = layoutWidth;",
-		'        const horizontal = this.borderColor("─");',
-		"        const bgColor = this.theme.bgColor;",
-		"        // Layout the text",
-		"        const layoutLines = this.layoutText(layoutWidth);",
-		"        // Calculate max visible lines: 30% of terminal height, minimum 5 lines",
-		"        const terminalRows = this.tui.terminal.rows;",
-		"        const maxVisibleLines = Math.max(5, Math.floor(terminalRows * 0.3));",
-		"        // Find the cursor line index in layoutLines",
-		"        let cursorLineIndex = layoutLines.findIndex((line) => line.hasCursor);",
-		"        if (cursorLineIndex === -1)",
-		"            cursorLineIndex = 0;",
-		"        // Adjust scroll offset to keep cursor visible",
-		"        if (cursorLineIndex < this.scrollOffset) {",
-		"            this.scrollOffset = cursorLineIndex;",
-		"        }",
-		"        else if (cursorLineIndex >= this.scrollOffset + maxVisibleLines) {",
-		"            this.scrollOffset = cursorLineIndex - maxVisibleLines + 1;",
-		"        }",
-		"        // Clamp scroll offset to valid range",
-		"        const maxScrollOffset = Math.max(0, layoutLines.length - maxVisibleLines);",
-		"        this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, maxScrollOffset));",
-		"        // Get visible lines slice",
-		"        const visibleLines = layoutLines.slice(this.scrollOffset, this.scrollOffset + maxVisibleLines);",
-		"        const result = [];",
-		'        const leftPadding = " ".repeat(paddingX);',
-		"        const rightPadding = leftPadding;",
-		"        const renderBorderLine = (indicator) => {",
-		"            const remaining = width - visibleWidth(indicator);",
-		"            if (remaining >= 0) {",
-		'                return this.borderColor(indicator + "─".repeat(remaining));',
-		"            }",
-		"            return this.borderColor(truncateToWidth(indicator, width));",
-		"        };",
-		"        // Render top padding row. When background fill is active, mimic the user-message block",
-		"        // instead of the stock editor chrome.",
-		"        if (bgColor) {",
-		"            if (this.scrollOffset > 0) {",
-		"                const indicator = `  ↑ ${this.scrollOffset} more`;",
-		"                result.push(applyBackgroundToLine(indicator, width, bgColor));",
-		"            }",
-		"            else {",
-		'                result.push(applyBackgroundToLine("", width, bgColor));',
-		"            }",
-		"        }",
-		"        else if (this.scrollOffset > 0) {",
-		"            const indicator = `─── ↑ ${this.scrollOffset} more `;",
-		"            result.push(renderBorderLine(indicator));",
-		"        }",
-		"        else {",
-		"            result.push(horizontal.repeat(width));",
-		"        }",
-		"        // Render each visible layout line",
-		"        // Emit hardware cursor marker only when focused and not showing autocomplete",
-		"        const emitCursorMarker = this.focused && !this.autocompleteState;",
-		"        const showPlaceholder = this.state.lines.length === 1 &&",
-		'            this.state.lines[0] === "" &&',
-		'            typeof this.theme.placeholderText === "string" &&',
-		"            this.theme.placeholderText.length > 0;",
-		"        for (let visibleIndex = 0; visibleIndex < visibleLines.length; visibleIndex++) {",
-		"            const layoutLine = visibleLines[visibleIndex];",
-		"            const isFirstLayoutLine = this.scrollOffset + visibleIndex === 0;",
-		"            let displayText = layoutLine.text;",
-		"            let lineVisibleWidth = visibleWidth(layoutLine.text);",
-		"            const isPlaceholderLine = showPlaceholder && isFirstLayoutLine;",
-		"            if (isPlaceholderLine) {",
-		"                const marker = emitCursorMarker ? CURSOR_MARKER : \"\";",
-		"                const rawPlaceholder = this.theme.placeholderText;",
-		'                const styledPlaceholder = typeof this.theme.placeholder === "function"',
-		"                    ? this.theme.placeholder(rawPlaceholder)",
-		"                    : rawPlaceholder;",
-		"                displayText = marker + styledPlaceholder;",
-		"                lineVisibleWidth = visibleWidth(rawPlaceholder);",
-		"            }",
-		"            else if (layoutLine.hasCursor && layoutLine.cursorPos !== undefined) {",
-		'                const marker = emitCursorMarker ? CURSOR_MARKER : "";',
-		"                const before = displayText.slice(0, layoutLine.cursorPos);",
-		"                const after = displayText.slice(layoutLine.cursorPos);",
-		"                displayText = before + marker + after;",
-		"            }",
-		"            // Calculate padding based on actual visible width",
-		'            const padding = " ".repeat(Math.max(0, contentWidth - lineVisibleWidth));',
-		"            const renderedLine = `${leftPadding}${displayText}${padding}${rightPadding}`;",
-		"            result.push(bgColor ? applyBackgroundToLine(renderedLine, width, bgColor) : renderedLine);",
-		"        }",
-		"        // Render bottom padding row. When background fill is active, mimic the user-message block",
-		"        // instead of the stock editor chrome.",
-		"        const linesBelow = layoutLines.length - (this.scrollOffset + visibleLines.length);",
-		"        if (bgColor) {",
-		"            if (linesBelow > 0) {",
-		"                const indicator = `  ↓ ${linesBelow} more`;",
-		"                result.push(applyBackgroundToLine(indicator, width, bgColor));",
-		"            }",
-		"            else {",
-		'                result.push(applyBackgroundToLine("", width, bgColor));',
-		"            }",
-		"        }",
-		"        else if (linesBelow > 0) {",
-		"            const indicator = `─── ↓ ${linesBelow} more `;",
-		"            const bottomLine = renderBorderLine(indicator);",
-		"            result.push(bottomLine);",
-		"        }",
-		"        else {",
-		"            const bottomLine = horizontal.repeat(width);",
-		"            result.push(bottomLine);",
-		"        }",
-		"        // Add autocomplete list if active",
-		"        if (this.autocompleteState && this.autocompleteList) {",
-		"            const autocompleteResult = this.autocompleteList.render(contentWidth);",
-		"            for (const line of autocompleteResult) {",
-		"                const lineWidth = visibleWidth(line);",
-		'                const linePadding = " ".repeat(Math.max(0, contentWidth - lineWidth));',
-		"                const autocompleteLine = `${leftPadding}${line}${linePadding}${rightPadding}`;",
-		"                result.push(bgColor ? applyBackgroundToLine(autocompleteLine, width, bgColor) : autocompleteLine);",
-		"            }",
-		"        }",
-		"        return result;",
-		"    }",
-	].join("\n");
-	editorSource = editorSource.replace(
-		/    render\(width\) \{[\s\S]*?\n    handleInput\(data\) \{/m,
-		`${desiredRender}\n    handleInput(data) {`,
-	);
-	writeFileSync(editorPath, editorSource, "utf8");
-}
-
-if (existsSync(webAccessPath)) {
-	const source = readFileSync(webAccessPath, "utf8");
-	if (source.includes('pi.registerCommand("search",')) {
-		writeFileSync(
-			webAccessPath,
-			source.replace('pi.registerCommand("search",', 'pi.registerCommand("web-results",'),
-			"utf8",
-		);
+const workspaceModelRegistryPath = resolveWorkspacePiFile("pi-coding-agent", "dist", "core", "model-registry.js");
+const workspaceModelRuntimePath = resolveWorkspacePiFile("pi-coding-agent", "dist", "core", "model-runtime.js");
+for (const entryPath of [modelRegistryPath, modelRuntimePath, workspaceModelRegistryPath, workspaceModelRuntimePath].filter(Boolean)) {
+	if (!existsSync(entryPath)) continue;
+	const source = readFileSync(entryPath, "utf8");
+	const patched = patchPiModelRegistrySource(source);
+	if (patched !== source) {
+		writeFileSync(entryPath, patched, "utf8");
 	}
 }
+
+const safeBraceExpansionPath = resolve(appRoot, "node_modules", "brace-expansion");
+patchPiBraceExpansionTree(resolve(appRoot, "node_modules"), safeBraceExpansionPath);
+patchPiBraceExpansionTree(workspaceRoot, safeBraceExpansionPath);
+const feynmanUndiciPath = resolve(appRoot, "node_modules", "undici");
+patchPiUndiciProxyTree(
+	resolve(appRoot, "node_modules"),
+	feynmanUndiciPath,
+	PI_RUNTIME_CORRECTNESS_REQUIRED_VERSION,
+);
+patchPiUndiciProxyTree(
+	workspaceRoot,
+	feynmanUndiciPath,
+	PI_RUNTIME_CORRECTNESS_REQUIRED_VERSION,
+);
+for (const nodeModulesRoot of [
+	resolve(appRoot, "node_modules"),
+	resolve(appRoot, "node_modules", "@companion-ai", "alpha-hub", "node_modules"),
+	workspaceRoot,
+	resolve(workspaceRoot, "@companion-ai", "alpha-hub", "node_modules"),
+]) {
+	patchMcpSdkManifest(nodeModulesRoot);
+}
+
+for (const [entryPath, patchSource] of [
+	[agentSessionPath, patchPiAgentSessionSource],
+	[workspaceAgentSessionPath, patchPiAgentSessionSource],
+	[sessionManagerPath, patchPiSessionManagerSource],
+	[workspaceSessionManagerPath, patchPiSessionManagerSource],
+	[transformMessagesPath, patchPiTransformMessagesSource],
+	[workspaceTransformMessagesPath, patchPiTransformMessagesSource],
+	...nestedTransformMessagesPaths.map((entryPath) => [entryPath, patchPiTransformMessagesSource]),
+	...workspaceNestedTransformMessagesPaths.map((entryPath) => [entryPath, patchPiTransformMessagesSource]),
+]) {
+	if (
+		!entryPath ||
+		!existsSync(entryPath) ||
+		!shouldPatchPiRuntimeCorrectnessFile(entryPath)
+	) continue;
+	const source = readFileSync(entryPath, "utf8");
+	const patched = patchSource(source);
+	if (patched !== source) {
+		writeFileSync(entryPath, patched, "utf8");
+	}
+}
+
+patchFilesIfPresent([
+	agentLoopPath,
+	...nestedAgentLoopPaths,
+	workspaceAgentLoopPath,
+	...workspaceNestedAgentLoopPaths,
+], patchPiAgentCoreSource);
+
+for (const entryPath of [llamaProviderPath, workspaceLlamaProviderPath].filter(Boolean)) {
+	if (!existsSync(entryPath) || !shouldPatchPiRuntimeCorrectnessFile(entryPath)) {
+		continue;
+	}
+	const source = readFileSync(entryPath, "utf8");
+	const patched = patchPiLlamaUsageSource(source);
+	if (patched !== source) {
+		writeFileSync(entryPath, patched, "utf8");
+	}
+}
+
+patchFilesIfPresent([
+	tuiPath,
+	...nestedTuiPaths,
+	workspaceTuiPath,
+	...workspaceNestedTuiPaths,
+], patchPiTuiSource);
+
+patchFilesIfPresent(
+	[interactiveThemePath, workspaceInteractiveThemePath],
+	patchPiInteractiveThemeSource,
+);
+
+patchFilesIfPresent(
+	[interactiveModePath, workspaceInteractiveModePath],
+	patchPiInteractiveUpdateNoticeSource,
+);
+
+patchFilesIfPresent([
+	editorPath,
+	...nestedEditorPaths,
+	workspaceEditorPath,
+	...workspaceNestedEditorPaths,
+], patchPiEditorSource);
 
 const piWebAccessRoot = resolve(workspaceRoot, "pi-web-access");
 
 if (existsSync(piWebAccessRoot)) {
+	const manifestPath = resolve(piWebAccessRoot, "package.json");
+	const version = existsSync(manifestPath)
+		? JSON.parse(readFileSync(manifestPath, "utf8")).version
+		: undefined;
+	assertPiWebAccessVersion(version, "embedded runtime workspace");
+	const sources = new Map();
 	for (const relativePath of PI_WEB_ACCESS_PATCH_TARGETS) {
 		const entryPath = resolve(piWebAccessRoot, relativePath);
-		if (!existsSync(entryPath)) continue;
-
-		const source = readFileSync(entryPath, "utf8");
-		const patched = patchPiWebAccessSource(relativePath, source);
+		if (!existsSync(entryPath)) {
+			throw new Error(`pi-web-access patch target is missing: ${relativePath}`);
+		}
+		sources.set(relativePath, readFileSync(entryPath, "utf8"));
+	}
+	const patchedSources = patchPiWebAccessSources(sources, "embedded runtime workspace");
+	for (const [relativePath, patched] of patchedSources) {
+		const entryPath = resolve(piWebAccessRoot, relativePath);
+		const source = sources.get(relativePath);
 		if (patched !== source) {
 			writeFileSync(entryPath, patched, "utf8");
 		}
@@ -585,16 +1047,13 @@ if (existsSync(piWebAccessRoot)) {
 
 if (existsSync(sessionSearchIndexerPath)) {
 	const source = readFileSync(sessionSearchIndexerPath, "utf8");
-	const original = 'const sessionsDir = path.join(os.homedir(), ".pi", "agent", "sessions");';
-	const replacement =
-		'const sessionsDir = process.env.FEYNMAN_SESSION_DIR ?? process.env.PI_SESSION_DIR ?? path.join(os.homedir(), ".pi", "agent", "sessions");';
-	if (source.includes(original)) {
-		writeFileSync(sessionSearchIndexerPath, source.replace(original, replacement), "utf8");
+	const patched = patchPiSessionSearchSource("extensions/indexer.ts", source);
+	if (patched !== source) {
+		writeFileSync(sessionSearchIndexerPath, patched, "utf8");
 	}
 }
 
 const oauthPagePath = piAiRoot ? resolve(piAiRoot, "dist", "utils", "oauth", "oauth-page.js") : null;
-const googleSharedPath = piAiRoot ? resolve(piAiRoot, "dist", "providers", "google-shared.js") : null;
 
 if (oauthPagePath && existsSync(oauthPagePath)) {
 	let source = readFileSync(oauthPagePath, "utf8");
@@ -607,38 +1066,53 @@ if (oauthPagePath && existsSync(oauthPagePath)) {
 	if (changed) writeFileSync(oauthPagePath, source, "utf8");
 }
 
-if (googleSharedPath && existsSync(googleSharedPath)) {
-	const source = readFileSync(googleSharedPath, "utf8");
-	const patched = patchPiGoogleLegacySchemaSource(source);
-	if (patched !== source) {
-		writeFileSync(googleSharedPath, patched, "utf8");
-	}
-}
-
 const alphaHubAuthPath = findPackageRoot("@companion-ai/alpha-hub")
 	? resolve(findPackageRoot("@companion-ai/alpha-hub"), "src", "lib", "auth.js")
 	: null;
+const alphaHubSearchPath = findPackageRoot("@companion-ai/alpha-hub")
+	? resolve(findPackageRoot("@companion-ai/alpha-hub"), "src", "lib", "alphaxiv.js")
+	: null;
+const alphaHubIndexPath = findPackageRoot("@companion-ai/alpha-hub")
+	? resolve(findPackageRoot("@companion-ai/alpha-hub"), "src", "lib", "index.js")
+	: null;
 
 if (alphaHubAuthPath && existsSync(alphaHubAuthPath)) {
-	let source = readFileSync(alphaHubAuthPath, "utf8");
-	const oldSuccess = "'<html><body><h2>Logged in to Alpha Hub</h2><p>You can close this tab.</p></body></html>'";
-	const oldError = "'<html><body><h2>Login failed</h2><p>You can close this tab.</p></body></html>'";
-	const bodyAttr = `style="font-family:system-ui,sans-serif;text-align:center;padding-top:20vh;background:#050a08;color:#f0f5f2"`;
-	const logo = `<h1 style="font-family:monospace;font-size:48px;color:#34d399;margin:0">feynman</h1>`;
-	const newSuccess = `'<html><body ${bodyAttr}>${logo}<h2 style="color:#34d399;margin-top:16px">Logged in</h2><p style="color:#8aaa9a">You can close this tab.</p></body></html>'`;
-	const newError = `'<html><body ${bodyAttr}>${logo}<h2 style="color:#ef4444;margin-top:16px">Login failed</h2><p style="color:#8aaa9a">You can close this tab.</p></body></html>'`;
-	if (source.includes(oldSuccess)) {
-		source = source.replace(oldSuccess, newSuccess);
+	const source = readFileSync(alphaHubAuthPath, "utf8");
+	const patched = patchAlphaHubAuthSource(source);
+	if (patched !== source) {
+		writeFileSync(alphaHubAuthPath, patched, "utf8");
 	}
-	if (source.includes(oldError)) {
-		source = source.replace(oldError, newError);
+}
+if (alphaHubSearchPath && existsSync(alphaHubSearchPath)) {
+	const source = readFileSync(alphaHubSearchPath, "utf8");
+	const patched = patchAlphaHubSearchSource(source);
+	if (patched !== source) {
+		writeFileSync(alphaHubSearchPath, patched, "utf8");
 	}
-	const brokenWinOpen = "else if (plat === 'win32') execSync(`start \"${url}\"`);";
-	const fixedWinOpen = "else if (plat === 'win32') execSync(`cmd /c start \"\" \"${url}\"`);";
-	if (source.includes(brokenWinOpen)) {
-		source = source.replace(brokenWinOpen, fixedWinOpen);
+}
+if (alphaHubIndexPath && existsSync(alphaHubIndexPath)) {
+	const source = readFileSync(alphaHubIndexPath, "utf8");
+	const patched = patchAlphaHubSearchResultsSource(source);
+	if (patched !== source) {
+		writeFileSync(alphaHubIndexPath, patched, "utf8");
 	}
-	writeFileSync(alphaHubAuthPath, source, "utf8");
+}
+
+// The bundled workspace carries its own alpha-hub copy; patch it the same way
+// so search fixes apply regardless of which copy resolves at runtime.
+const workspaceAlphaHubLib = resolve(workspaceRoot, "@companion-ai", "alpha-hub", "src", "lib");
+for (const [fileName, patchFn] of [
+	["auth.js", patchAlphaHubAuthSource],
+	["alphaxiv.js", patchAlphaHubSearchSource],
+	["index.js", patchAlphaHubSearchResultsSource],
+]) {
+	const filePath = resolve(workspaceAlphaHubLib, fileName);
+	if (!existsSync(filePath)) continue;
+	const source = readFileSync(filePath, "utf8");
+	const patched = patchFn(source);
+	if (patched !== source) {
+		writeFileSync(filePath, patched, "utf8");
+	}
 }
 
 if (existsSync(piMemoryPath)) {

@@ -17,22 +17,19 @@ The wizard walks you through three stages: model configuration, authentication, 
 
 ## Stage 1: Model selection
 
-Feynman supports multiple model providers. The setup wizard presents a list of available providers and models. Select your preferred default model using the arrow keys:
+Feynman supports multiple model providers. The setup wizard presents a list of available providers and models. Select your preferred non-Pro default model using the arrow keys:
 
 ```
 ? Select your default model:
-  anthropic:claude-sonnet-4-20250514
-> anthropic:claude-opus-4-20250514
-  openai:gpt-4o
-  openai:o3
-  google:gemini-2.5-pro
+> provider:non-pro-model-from-your-list
+  provider:another-non-pro-model
 ```
 
-The model you choose here becomes the default for all sessions. You can override it per-session with the `--model` flag or change it later via `feynman model set <provider:model>`.
+The non-Pro model you choose here becomes the default for all sessions. You can override it per-session with the `--model` flag or change it later via `feynman model set <provider/model>` or `feynman model set <provider:model>`. Feynman rejects Pro-class model IDs for default and explicit model selection; choose a non-Pro model.
 
 ## Stage 2: Authentication
 
-Depending on your chosen provider, setup prompts you for an API key or walks you through OAuth login. For providers that support Pi OAuth (like Anthropic and OpenAI), Feynman opens a browser window to complete the sign-in flow. Your credentials are stored securely in the Pi auth storage at `~/.feynman/`.
+Depending on your chosen provider, setup prompts you for an API key or walks you through OAuth login. For providers that support Pi OAuth (like Anthropic, OpenAI, and OpenRouter), Feynman opens a browser window to complete the sign-in flow. In a remote or headless OpenRouter session where the loopback callback is unavailable, paste the browser's final redirect URL or authorization code into Feynman's prompt. You can also set `OPENROUTER_API_KEY` before launching Feynman to use an OpenRouter API key without OAuth. Stored credentials live in the Pi auth storage at `~/.feynman/`.
 
 For API key providers, you are prompted to paste your key directly:
 
@@ -42,9 +39,51 @@ For API key providers, you are prompted to paste your key directly:
 
 Keys are encrypted at rest and never sent anywhere except the provider's API endpoint.
 
-### Local models: Ollama, LM Studio, vLLM
+### Amazon Bedrock
 
-If you want to use a model running locally, choose the API-key flow and then select:
+For Amazon Bedrock, choose:
+
+```text
+Amazon Bedrock (AWS credential chain)
+```
+
+Feynman verifies the same AWS credential chain Pi uses at runtime, including `AWS_PROFILE`, `~/.aws` credentials/config, SSO, ECS/IRSA, and EC2 instance roles. Once that check passes, Bedrock models become available in `feynman model list` without needing a traditional API key.
+
+### Local models: LM Studio, LiteLLM, Ollama, vLLM
+
+If you want to use LM Studio, start the LM Studio local server, load a model, choose the API-key flow, and then select:
+
+```text
+LM Studio (local OpenAI-compatible server)
+```
+
+The default settings are:
+
+```text
+Base URL: http://localhost:1234/v1
+Authorization header: No
+API key: lm-studio
+```
+
+Feynman attempts to read LM Studio's `/models` endpoint and prefill the loaded model id.
+
+For LiteLLM, start the proxy, choose the API-key flow, and then select:
+
+```text
+LiteLLM Proxy (OpenAI-compatible gateway)
+```
+
+The default settings are:
+
+```text
+Base URL: http://localhost:4000/v1
+API mode: openai-completions
+Master key: optional, read from LITELLM_MASTER_KEY
+```
+
+Feynman attempts to read LiteLLM's `/models` endpoint and prefill model ids from the proxy config.
+
+For Ollama, vLLM, or another OpenAI-compatible local server, choose:
 
 ```text
 Custom provider (baseUrl + API key)
@@ -60,7 +99,7 @@ Model ids: llama3.1:8b
 API key: local
 ```
 
-That same custom-provider flow also works for other OpenAI-compatible local servers such as LM Studio or vLLM. After saving the provider, run:
+After saving the provider, run:
 
 ```bash
 feynman model list
@@ -71,14 +110,20 @@ to confirm the local model is available and make it the default.
 
 ## Stage 3: Optional packages
 
-Feynman's core ships with the essentials, but some features require additional packages. The wizard asks if you want to install optional presets:
+Feynman's core ships with the research essentials: alphaXiv access, web access, document parsing, subagents, and `/btw` side conversations while the main research agent is busy. On platforms with supported optional presets, the wizard can offer extras:
 
-- **session-search** -- Enables searching prior session transcripts for past research
-- **memory** -- Automatic preference and correction memory across sessions
-- **generative-ui** -- Interactive HTML-style widgets for rich output
+- **memory** -- Preference and correction memory for research-session continuity
+- **hindsight** -- Hindsight-backed research-continuity memory; requires a Hindsight server or Hindsight Cloud account
+- **session-search** -- Indexed recall for prior research-session transcripts. Available through Node.js 22.x while its sqlite dependency is native-bound
 
 You can skip this step and install packages later with `feynman packages install <preset>`.
 
+## Workbench onboarding
+
+`feynman serve` includes a separate local onboarding flow for the science workbench. That flow creates a Feynman project and session, captures field and research-goal context, selects a suggested specialist, records chosen setup scopes, suggests seed workflows, and enables Feynman-owned connectors such as Feynman Bio Tools when science-database access is selected.
+
+Workbench onboarding stores setup intent and redacted credential availability records in Feynman-owned state. It does not require another local app and does not expose raw credential values in the browser.
+
 ## Re-running setup
 
-Configuration is stored in `~/.feynman/settings.json`. Running `feynman setup` again overwrites previous settings. If you only need to change a specific value, edit the config file directly or use the targeted commands like `feynman model set` or `feynman alpha login`.
+Configuration is stored in `~/.feynman/agent/settings.json`. Running `feynman setup` again overwrites previous settings. If you only need to change a specific value, edit the config file directly or use the targeted commands like `feynman model set` or `feynman alpha login`.

@@ -29,12 +29,21 @@ test("getOpenUrlCommand uses xdg-open on Linux when available", () => {
 	});
 });
 
-test("getOpenUrlCommand uses cmd start on Windows", () => {
+test("getOpenUrlCommand uses explorer on Windows", () => {
 	const command = getOpenUrlCommand("https://example.com", "win32");
 
 	assert.deepEqual(command, {
-		command: "cmd",
-		args: ["/c", "start", "", "https://example.com"],
+		command: "explorer",
+		args: ["https://example.com"],
+	});
+});
+
+test("getOpenUrlCommand passes Windows URLs as a single argument", () => {
+	const command = getOpenUrlCommand("https://example.com/?q=ok&calc.exe", "win32");
+
+	assert.deepEqual(command, {
+		command: "explorer",
+		args: ["https://example.com/?q=ok&calc.exe"],
 	});
 });
 

@@ -47,4 +47,4 @@ The audit report contains:
 
 ## When to use it
 
-Use `/audit` when you are deciding whether to build on a paper's results, when replicating an experiment, or when reviewing a paper for a venue and want to verify its claims against the code. It is also useful for auditing your own papers before submission to catch inconsistencies between your writeup and implementation.
+Use `/audit` when you are deciding whether to build on a paper's results, when replicating an experiment, or when evaluating a paper before relying on its claims. It is also useful for auditing your own papers before submission to catch inconsistencies between your writeup and implementation.

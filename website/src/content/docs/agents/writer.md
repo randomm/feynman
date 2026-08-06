@@ -25,7 +25,7 @@ The writer agent handles several document types:
 
 ## Citation handling
 
-The writer maintains citation integrity throughout the document. Every factual claim is linked back to its source. When multiple sources support the same claim, all are cited. When a claim comes from a single source, the writer notes this to help the reader assess confidence. The final reference list includes only works actually cited in the text.
+The writer maintains citation integrity for research claims in the document. Strong factual claims are linked back to source material, and single-source claims are qualified so the reader can assess confidence. The final reference list includes works actually cited in the text.
 
 ## Iteration
 
@@ -33,4 +33,4 @@ The writer supports iterative refinement. After producing an initial draft, you 
 
 ## Used by
 
-The writer agent is used by `/deepresearch` (for the final brief), `/lit` (for the review document), `/draft` (as the primary agent), and `/compare` (for the comparison report). It is always the last agent to run in a workflow, producing the final output from the material gathered and evaluated by the researcher and reviewer agents.
+The writer agent is used by `/deepresearch` (for the final brief), `/lit` (for the review document), `/draft` (as the primary agent), and `/compare` (for the comparison report). It usually runs near the end of a workflow, producing the final output from material gathered and evaluated earlier.

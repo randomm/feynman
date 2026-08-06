@@ -2,10 +2,10 @@
 title: Draft Writing
 description: Generate a paper-style draft from research findings and session context.
 section: Workflows
-order: 7
+order: 8
 ---
 
-The draft writing workflow generates structured academic-style documents from your research findings. It uses the writer agent to produce well-organized prose with proper citations, sections, and formatting suitable for papers, reports, or blog posts.
+The draft writing workflow generates structured academic-style documents from your research findings. It uses the writer agent to produce well-organized prose with proper citations, sections, and formatting suitable for papers, technical reports, or internal research notes.
 
 ## Usage
 
@@ -35,6 +35,8 @@ When working from existing session context (after a deep research or literature 
 
 The writer pays attention to academic conventions: claims are attributed to their sources with inline citations, methodology sections describe procedures precisely, and limitations are discussed honestly. The draft includes placeholder sections for any content the writer cannot generate from available sources, clearly marking what needs human input.
 
+Drafts follow Feynman's system-wide provenance rules: unsupported results, figures, images, tables, or benchmark data should become clearly labeled gaps or TODOs, not plausible-looking claims.
+
 ## Output format
 
 The draft follows standard academic structure:
@@ -48,4 +50,4 @@ The draft follows standard academic structure:
 
 ## Preview and iteration
 
-After generating the draft, use `/preview` to render it as HTML or PDF with proper formatting, math rendering, and typography. You can iterate on the draft by asking Feynman to revise specific sections, add more detail, or restructure the argument.
+After generating the draft, use `/preview` when a preview command is visible, or render it with shell tools such as `pandoc`, to review HTML/PDF formatting, math rendering, and typography. You can iterate on the draft by asking Feynman to revise specific sections, add more detail, or restructure the argument.

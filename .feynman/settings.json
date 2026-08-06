@@ -1,18 +1,12 @@
 {
+  "themes": ["-themes/feynman.json"],
   "packages": [
-    "npm:@companion-ai/alpha-hub",
-    "npm:pi-btw",
-    "npm:pi-docparser",
-    "npm:pi-web-access",
-    "npm:pi-markdown-preview",
-    "npm:@walterra/pi-charts",
-    "npm:pi-mermaid",
-    "npm:@aliou/pi-processes",
-    "npm:pi-zotero",
-    "npm:@kaiserlich-dev/pi-session-search",
-    "npm:pi-schedule-prompt",
-    "npm:@samfp/pi-memory",
-    "npm:@tmustier/pi-ralph-wiggum"
+    "npm:@companion-ai/alpha-hub@0.1.3",
+    "npm:pi-subagents@0.40.0",
+    "npm:pi-btw@0.4.1",
+    "npm:pi-docparser@4.0.0",
+    "npm:pi-web-access@0.18.0",
+    "npm:pi-otel@0.1.0"
   ],
   "quietStartup": true,
   "collapseChangelog": true

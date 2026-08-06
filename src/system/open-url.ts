@@ -16,8 +16,8 @@ export function getOpenUrlCommand(
 ): OpenUrlCommand | undefined {
 	if (platform === "win32") {
 		return {
-			command: "cmd",
-			args: ["/c", "start", "", url],
+			command: "explorer",
+			args: [url],
 		};
 	}
 

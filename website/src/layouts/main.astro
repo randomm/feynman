@@ -1,6 +1,6 @@
 ---
 import "@/styles/global.css"
-import { ViewTransitions } from "astro:transitions"
+import { ClientRouter } from "astro:transitions"
 
 interface Props {
   title?: string
@@ -25,7 +25,7 @@ const {
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet" />
-    <ViewTransitions />
+    <ClientRouter />
     <script is:inline>
       ;(function () {
         const theme = localStorage.getItem("theme")
@@ -54,7 +54,7 @@ const {
             Docs
           </a>
           <a
-            href="https://github.com/getcompanion-ai/feynman"
+            href="https://github.com/companion-inc/feynman"
             target="_blank"
             rel="noopener noreferrer"
             class="text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -89,7 +89,8 @@ const {
           >
             <path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" />
           </svg>
-        </button>
+          </button>
+        </div>
       </div>
     </nav>
 
@@ -105,7 +106,7 @@ const {
         <div class="flex items-center gap-4 text-sm">
           <a href="/docs/getting-started/installation" class="text-muted-foreground transition-colors hover:text-foreground">Docs</a>
           <a
-            href="https://github.com/getcompanion-ai/feynman"
+            href="https://github.com/companion-inc/feynman"
             target="_blank"
             rel="noopener noreferrer"
             class="text-muted-foreground transition-colors hover:text-foreground"

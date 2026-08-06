@@ -5,7 +5,7 @@ description: Compare a paper's claims against its public codebase. Use when the 
 
 # Paper-Code Audit
 
-Run the `/audit` workflow. Read the prompt template at `../prompts/audit.md` for the full procedure.
+Run the `/audit` workflow. The slash command expands the full workflow instructions in the active session; do not try to read a relative prompt-template path from the installed skill directory.
 
 Agents used: `researcher`, `verifier`
 

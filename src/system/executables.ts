@@ -1,5 +1,6 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { dirname, delimiter } from "node:path";
 
 const isWindows = process.platform === "win32";
 const programFiles = process.env.PROGRAMFILES ?? "C:\\Program Files";
@@ -32,30 +33,87 @@ export const MERMAID_FALLBACK_PATHS = isWindows
 	? []
 	: ["/opt/homebrew/bin/mmdc", "/usr/local/bin/mmdc"];
 
-export function resolveExecutable(name: string, fallbackPaths: string[] = []): string | undefined {
+function findInFallbackPaths(fallbackPaths: string[]): string | undefined {
 	for (const candidate of fallbackPaths) {
 		if (existsSync(candidate)) {
 			return candidate;
 		}
 	}
+	return undefined;
+}
 
-	const isWindows = process.platform === "win32";
-	const result = isWindows
-		? spawnSync("cmd", ["/c", `where ${name}`], {
-				encoding: "utf8",
-				stdio: ["ignore", "pipe", "ignore"],
-			})
-		: spawnSync("sh", ["-lc", `command -v ${name}`], {
-				encoding: "utf8",
-				stdio: ["ignore", "pipe", "ignore"],
-			});
+function parseExecutablePath(stdout: string): string | undefined {
+	const resolved = stdout.trim().split(/\r?\n/)[0];
+	return resolved || undefined;
+}
+
+function executableCommand(name: string): { command: string; args: string[] } {
+	return isWindows ? { command: "cmd", args: ["/c", `where ${name}`] } : { command: "sh", args: ["-c", `command -v ${name}`] };
+}
+
+export function resolveExecutable(name: string, fallbackPaths: string[] = []): string | undefined {
+	const fallback = findInFallbackPaths(fallbackPaths);
+	if (fallback) {
+		return fallback;
+	}
+
+	const command = executableCommand(name);
+	const env = {
+		...process.env,
+		PATH: process.env.PATH ?? "",
+	};
+	const result = spawnSync(command.command, command.args, {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "ignore"],
+		env,
+	});
 
 	if (result.status === 0) {
-		const resolved = result.stdout.trim().split(/\r?\n/)[0];
+		const resolved = parseExecutablePath(result.stdout);
 		if (resolved) {
 			return resolved;
 		}
 	}
 
 	return undefined;
+}
+
+export async function resolveExecutableAsync(name: string, fallbackPaths: string[] = []): Promise<string | undefined> {
+	const fallback = findInFallbackPaths(fallbackPaths);
+	if (fallback) {
+		return fallback;
+	}
+
+	const command = executableCommand(name);
+	const env = {
+		...process.env,
+		PATH: process.env.PATH ?? "",
+	};
+
+	return new Promise((resolvePromise) => {
+		execFile(command.command, command.args, { encoding: "utf8", env }, (_error, stdout) => {
+			resolvePromise(parseExecutablePath(stdout ?? ""));
+		});
+	});
+}
+
+export type ResolvedExecutables = {
+	pandoc: string | undefined;
+	mermaid: string | undefined;
+	browser: string | undefined;
+};
+
+export async function resolveAllExecutables(): Promise<ResolvedExecutables> {
+	const [pandoc, mermaid, browser] = await Promise.all([
+		resolveExecutableAsync("pandoc", PANDOC_FALLBACK_PATHS),
+		resolveExecutableAsync("mmdc", MERMAID_FALLBACK_PATHS),
+		resolveExecutableAsync("google-chrome", BROWSER_FALLBACK_PATHS),
+	]);
+	return { pandoc, mermaid, browser };
+}
+
+export function getPathWithCurrentNode(pathValue = process.env.PATH ?? ""): string {
+	const nodeDir = dirname(process.execPath);
+	const parts = pathValue.split(delimiter).filter(Boolean);
+	return parts.includes(nodeDir) ? pathValue : `${nodeDir}${delimiter}${pathValue}`;
 }

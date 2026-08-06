@@ -103,10 +103,12 @@ function pruneLiteparse(nodeModulesRoot) {
 }
 
 function prunePiCodingAgent(nodeModulesRoot) {
-	const pkgRoot = join(nodeModulesRoot, "@mariozechner", "pi-coding-agent");
-	if (!existsSync(pkgRoot)) return;
-	removePath(join(pkgRoot, "docs"));
-	removePath(join(pkgRoot, "examples"));
+	for (const scope of ["@earendil-works", "@mariozechner"]) {
+		const pkgRoot = join(nodeModulesRoot, scope, "pi-coding-agent");
+		if (!existsSync(pkgRoot)) continue;
+		removePath(join(pkgRoot, "docs"));
+		removePath(join(pkgRoot, "examples"));
+	}
 }
 
 function pruneMermaid(nodeModulesRoot) {

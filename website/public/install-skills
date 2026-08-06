@@ -3,7 +3,7 @@
 set -eu
 
 VERSION="latest"
-SCOPE="${FEYNMAN_SKILLS_SCOPE:-user}"
+SCOPE="${FEYNMAN_SKILLS_SCOPE:-codex}"
 TARGET_DIR="${FEYNMAN_SKILLS_DIR:-}"
 
 step() {
@@ -78,7 +78,7 @@ resolve_version() {
   normalized_version="$(normalize_version "$VERSION")"
 
   if [ "$normalized_version" = "latest" ]; then
-    release_page="$(download_text "https://github.com/getcompanion-ai/feynman/releases/latest")"
+    release_page="$(download_text "https://github.com/companion-inc/feynman/releases/latest")"
     resolved_version="$(printf '%s\n' "$release_page" | sed -n 's@.*releases/tag/v\([0-9][^"<>[:space:]]*\).*@\1@p' | head -n 1)"
 
     if [ -z "$resolved_version" ]; then
@@ -103,12 +103,15 @@ resolve_target_dir() {
     repo)
       printf '%s/.agents/skills/feynman\n' "$PWD"
       ;;
-    user)
+    opencode)
+      printf '%s/.opencode/skills/feynman\n' "$PWD"
+      ;;
+    codex | user)
       codex_home="${CODEX_HOME:-$HOME/.codex}"
       printf '%s/skills/feynman\n' "$codex_home"
       ;;
     *)
-      echo "Unknown scope: $SCOPE (expected --user or --repo)" >&2
+      echo "Unknown scope: $SCOPE (expected --codex, --user, --repo, or --opencode)" >&2
       exit 1
       ;;
   esac
@@ -119,12 +122,18 @@ while [ $# -gt 0 ]; do
     --repo)
       SCOPE="repo"
       ;;
+    --opencode)
+      SCOPE="opencode"
+      ;;
+    --codex)
+      SCOPE="codex"
+      ;;
     --user)
-      SCOPE="user"
+      SCOPE="codex"
       ;;
     --dir)
       if [ $# -lt 2 ]; then
-        echo "Usage: install-skills.sh [stable|latest|<version>] [--user|--repo] [--dir <path>]" >&2
+        echo "Usage: install-skills.sh [stable|latest|<version>] [--codex|--user|--repo|--opencode] [--dir <path>]" >&2
         exit 1
       fi
       TARGET_DIR="$2"
@@ -135,7 +144,7 @@ while [ $# -gt 0 ]; do
       ;;
     *)
       echo "Unknown argument: $1" >&2
-      echo "Usage: install-skills.sh [stable|latest|<version>] [--user|--repo] [--dir <path>]" >&2
+      echo "Usage: install-skills.sh [stable|latest|<version>] [--codex|--user|--repo|--opencode] [--dir <path>]" >&2
       exit 1
       ;;
   esac
@@ -150,10 +159,10 @@ archive_url="${FEYNMAN_INSTALL_SKILLS_ARCHIVE_URL:-}"
 if [ -z "$archive_url" ]; then
   case "$git_ref" in
     main)
-      archive_url="https://github.com/getcompanion-ai/feynman/archive/refs/heads/main.tar.gz"
+      archive_url="https://github.com/companion-inc/feynman/archive/refs/heads/main.tar.gz"
       ;;
     v*)
-      archive_url="https://github.com/getcompanion-ai/feynman/archive/refs/tags/${git_ref}.tar.gz"
+      archive_url="https://github.com/companion-inc/feynman/archive/refs/tags/${git_ref}.tar.gz"
       ;;
   esac
 fi
@@ -202,8 +211,11 @@ case "$SCOPE" in
   repo)
     step "Repo-local skills will be discovered automatically from .agents/skills"
     ;;
-  user)
-    step "User-level skills will be discovered from \$CODEX_HOME/skills"
+  opencode)
+    step "OpenCode project skills will be discovered from .opencode/skills"
+    ;;
+  codex | user)
+    step "Codex user skills will be discovered from \$CODEX_HOME/skills"
     ;;
 esac
 

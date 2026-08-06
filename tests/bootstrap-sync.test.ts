@@ -80,3 +80,35 @@ test("syncBundledAssets removes deleted managed files but preserves user-modifie
 	assert.deepEqual(secondResult.skipped, ["legacy/SKILL.md"]);
 	assert.equal(readFileSync(join(agentDir, "skills", "legacy", "SKILL.md"), "utf8"), "# user legacy override\n");
 });
+
+test("syncBundledAssets installs Feynman's Option+Enter newline binding without overriding user config", async () => {
+	const appRoot = createAppRoot();
+	const home = mkdtempSync(join(tmpdir(), "feynman-home-"));
+	process.env.FEYNMAN_HOME = home;
+	const agentDir = join(home, "agent");
+	const bundledConfigDir = join(appRoot, ".feynman", "config");
+	mkdirSync(bundledConfigDir, { recursive: true });
+	writeFileSync(join(bundledConfigDir, "keybindings.json"), JSON.stringify({
+		"tui.input.newLine": ["ctrl+j", "alt+enter"],
+		"app.message.followUp": ["shift+enter"],
+	}, null, 2) + "\n");
+
+	const result = syncBundledAssets(appRoot, agentDir);
+	const keybindingsPath = join(agentDir, "keybindings.json");
+	const { KeybindingsManager } = await import("../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js");
+	const keybindings = KeybindingsManager.create(agentDir);
+
+	assert.ok(result.copied.includes("keybindings.json"));
+	assert.deepEqual(keybindings.getKeys("tui.input.newLine"), ["ctrl+j", "alt+enter"]);
+	assert.deepEqual(keybindings.getKeys("app.message.followUp"), ["shift+enter"]);
+	assert.equal(keybindings.matches("\u001b\r", "tui.input.newLine"), true);
+	assert.equal(keybindings.matches("\u001b[13;3u", "tui.input.newLine"), true);
+	assert.equal(keybindings.matches("\u001b\r", "app.message.followUp"), false);
+	assert.equal(keybindings.matches("\u001b[13;2u", "app.message.followUp"), true);
+
+	writeFileSync(keybindingsPath, '{"tui.input.newLine":["ctrl+j"]}\n');
+	writeFileSync(join(bundledConfigDir, "keybindings.json"), '{"tui.input.newLine":["alt+enter"]}\n');
+	const updateResult = syncBundledAssets(appRoot, agentDir);
+	assert.ok(updateResult.skipped.includes("keybindings.json"));
+	assert.equal(readFileSync(keybindingsPath, "utf8"), '{"tui.input.newLine":["ctrl+j"]}\n');
+});

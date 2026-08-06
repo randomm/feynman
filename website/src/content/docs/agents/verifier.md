@@ -21,9 +21,9 @@ The verifier follows a systematic process for each claim it checks:
 2. **Locate the relevant section** -- Find where the source addresses the claim
 3. **Compare** -- Check whether the source supports the claim as stated
 4. **Classify** -- Mark the claim as verified, unsupported, overstated, or contradicted
-5. **Document** -- Record the evidence with exact quotes and locations
+5. **Document** -- Record the evidence with source locations and short quotes only when needed
 
-This process is deterministic and traceable. Every verification result includes the specific passage or code that was checked, making it easy to audit the verifier's work.
+This process is traceable. Completed verification notes identify the specific passage or code that was checked, making it easy to audit the verifier's work.
 
 ## Confidence and limitations
 
@@ -33,4 +33,4 @@ The verifier is honest about its limitations. When a claim cannot be verified be
 
 ## Used by
 
-The verifier agent is used by `/deepresearch` (final fact-checking pass), `/audit` (comparing paper claims to code), and `/replicate` (verifying that the replication plan captures all necessary details). It serves as the quality control step that runs after the researcher and writer have produced their output.
+The verifier agent is used by `/deepresearch` (final fact-checking pass), `/audit` (comparing paper claims to code), `/replicate` (verifying that the replication plan captures all necessary details), and non-trivial `/recipe` runs (checking the top recipe's key sources, dataset availability, and code paths). It serves as the quality control step that runs after the researcher and writer have produced their output.

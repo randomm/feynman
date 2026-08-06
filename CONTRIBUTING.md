@@ -4,10 +4,10 @@ Feynman is a research-first CLI built on Pi and alphaXiv. This guide is for huma
 
 ## Quick Links
 
-- GitHub: https://github.com/getcompanion-ai/feynman
+- GitHub: https://github.com/companion-inc/feynman
 - Docs: https://feynman.is/docs
 - Repo agent contract: [AGENTS.md](AGENTS.md)
-- Issues: https://github.com/getcompanion-ai/feynman/issues
+- Issues: https://github.com/companion-inc/feynman/issues
 
 ## What Goes Where
 
@@ -24,7 +24,7 @@ If you need to change how bundled subagents behave, edit `.feynman/agents/*.md`.
 ## Before You Open a PR
 
 1. Start from the latest `main`.
-2. Use Node.js `20.19.0` or newer. The repo expects `.nvmrc`, `package.json` engines, `website/package.json` engines, and the runtime version guard to stay aligned.
+2. Use Node.js `24.x` for local development. The supported runtime range is Node.js `22.22.0` through `25.x`; `.nvmrc` pins the preferred local version while `package.json`, `website/package.json`, and the runtime version guard define the broader supported range. The optional session-search package remains limited to Node.js `22.x` because its sqlite dependency does not reliably install on newer Node majors.
 3. Install dependencies from the repo root:
 
 ```bash

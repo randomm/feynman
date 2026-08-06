@@ -1,4 +1,6 @@
-export const MIN_NODE_VERSION = "20.19.0";
+export const MIN_NODE_VERSION = "22.22.0";
+export const MAX_NODE_MAJOR = 25;
+export const PREFERRED_NODE_MAJOR = 24;
 
 type ParsedNodeVersion = {
 	major: number;
@@ -22,16 +24,21 @@ function compareNodeVersions(left: ParsedNodeVersion, right: ParsedNodeVersion):
 }
 
 export function isSupportedNodeVersion(version = process.versions.node): boolean {
-	return compareNodeVersions(parseNodeVersion(version), parseNodeVersion(MIN_NODE_VERSION)) >= 0;
+	const parsed = parseNodeVersion(version);
+	return compareNodeVersions(parsed, parseNodeVersion(MIN_NODE_VERSION)) >= 0 && parsed.major <= MAX_NODE_MAJOR;
 }
 
 export function getUnsupportedNodeVersionLines(version = process.versions.node): string[] {
 	const isWindows = process.platform === "win32";
+	const parsed = parseNodeVersion(version);
+	const rangeText = `Node.js ${MIN_NODE_VERSION} through ${MAX_NODE_MAJOR}.x`;
 	return [
-		`feynman requires Node.js ${MIN_NODE_VERSION} or later (detected ${version}).`,
-		isWindows
-			? "Install a newer Node.js from https://nodejs.org, or use the standalone installer:"
-			: "Switch to Node 20 with `nvm install 20 && nvm use 20`, or use the standalone installer:",
+		`feynman supports ${rangeText} (detected ${version}).`,
+		parsed.major > MAX_NODE_MAJOR
+			? "This newer Node release is not supported yet."
+			: isWindows
+				? "Install a supported Node.js release from https://nodejs.org, or use the standalone installer:"
+				: `Switch to a supported Node release with \`nvm install ${PREFERRED_NODE_MAJOR} && nvm use ${PREFERRED_NODE_MAJOR}\`, or use the standalone installer:`,
 		isWindows
 			? "irm https://feynman.is/install.ps1 | iex"
 			: "curl -fsSL https://feynman.is/install | bash",

@@ -1,11 +1,11 @@
 ---
 title: Autoresearch
-description: Start an autonomous experiment loop that iteratively optimizes toward a goal.
+description: Start a bounded research experiment loop that iteratively optimizes against a benchmark.
 section: Workflows
-order: 8
+order: 9
 ---
 
-The autoresearch workflow launches an autonomous research loop that iteratively designs experiments, runs them, analyzes results, and proposes next steps. It is designed for open-ended exploration where the goal is optimization or discovery rather than a specific answer.
+The autoresearch workflow runs a bounded research experiment loop that iteratively proposes changes, runs a benchmark, records evidence, and decides whether to keep or revert each change. It is designed for model, retrieval, prompt, architecture, or dataset experiments where the feedback signal is explicit.
 
 ## Usage
 
@@ -21,11 +21,11 @@ From the CLI:
 feynman autoresearch "Optimize prompt engineering strategies for math reasoning on GSM8K"
 ```
 
-Autoresearch runs as a long-lived background process. You can monitor its progress, pause it, or redirect its focus at any time.
+Autoresearch runs in the active Feynman session after you confirm the benchmark, metric, environment, files in scope, and iteration limit.
 
 ## How it works
 
-The autoresearch workflow is powered by `@tmustier/pi-ralph-wiggum`, which provides long-running agent loops. The workflow begins by analyzing the research goal and designing an initial experiment plan. It then enters an iterative loop:
+The workflow begins by analyzing the research goal and designing an initial experiment plan. It then enters an iterative loop:
 
 1. **Hypothesis** -- The agent proposes a hypothesis or modification based on current results
 2. **Experiment** -- It designs and executes an experiment to test the hypothesis
@@ -36,13 +36,7 @@ Each iteration builds on the previous ones. The agent maintains a running log of
 
 ## Monitoring and control
 
-Check active autoresearch jobs:
-
-```
-/jobs
-```
-
-Autoresearch runs in the background, so you can continue using Feynman for other tasks while it works. The `/jobs` command shows the current status, iteration count, and best result so far. You can interrupt the loop at any time to provide guidance or redirect the search.
+The loop writes `autoresearch.md`, `autoresearch.jsonl`, and benchmark output in the active workspace. Use those files, plus `CHANGELOG.md` milestone entries, to inspect the current best result, failed hypotheses, and next step.
 
 ## Output format
 
@@ -55,4 +49,4 @@ Autoresearch produces a running experiment log that includes:
 
 ## When to use it
 
-Use `/autoresearch` for tasks that benefit from iterative exploration: hyperparameter optimization, prompt engineering, architecture search, or any problem where the search space is large and the feedback signal is clear. It is not the right tool for answering a specific question (use `/deepresearch` for that) but excels at finding what works best through systematic experimentation.
+Use `/autoresearch` for research tasks that benefit from iterative exploration: hyperparameter optimization, prompt-strategy evaluation, architecture search, retrieval tuning, or dataset/benchmark ablations where the search space is large and the feedback signal is clear. It is not the right tool for answering a specific question (use `/deepresearch` for that) and it is not a generic code-optimization loop.

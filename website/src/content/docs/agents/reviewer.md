@@ -1,15 +1,15 @@
 ---
 title: Reviewer
-description: The reviewer agent evaluates documents with severity-graded academic feedback.
+description: The reviewer agent evaluates research artifacts with severity-graded critique.
 section: Agents
 order: 2
 ---
 
-The reviewer agent evaluates documents, papers, and research artifacts with the rigor of an academic peer reviewer. It produces severity-graded feedback covering methodology, claims, writing quality, and reproducibility.
+The reviewer agent evaluates documents, papers, and research artifacts with internal research-review rigor. It does not claim external reviewer authority or venue acceptance; it produces actionable research critique covering methodology, claims, writing quality, and reproducibility.
 
 ## What it does
 
-The reviewer reads a document end-to-end and evaluates it against standard academic criteria. It checks whether claims are supported by the presented evidence, whether the methodology is sound and described in sufficient detail, whether the experimental design controls for confounds, and whether the writing is clear and complete.
+For review tasks, the reviewer reads the available artifact and evaluates it against standard academic criteria. It checks whether claims are supported by the presented evidence, whether the methodology is sound and described in sufficient detail, whether the experimental design controls for confounds, and whether the writing is clear and complete.
 
 Each piece of feedback is assigned a severity level. **Critical** issues are fundamental problems that undermine the document's validity, such as a statistical test applied incorrectly or a conclusion not supported by the data. **Major** issues are significant problems that should be addressed, like missing baselines or inadequate ablation studies. **Minor** issues are suggestions for improvement, and **nits** are stylistic or formatting comments.
 
@@ -30,4 +30,4 @@ The reviewer provides a confidence score for each finding, indicating how certai
 
 ## Used by
 
-The reviewer agent is the primary agent in the `/review` workflow. It also contributes to `/audit` (evaluating paper claims against code) and `/compare` (assessing the strength of evidence across sources). Like all agents, it is dispatched automatically by the workflow orchestrator.
+The reviewer agent is the primary agent in the `/review` workflow. It also contributes to `/audit` (evaluating paper claims against code) and `/compare` (assessing the strength of evidence across sources). Workflow prompts call it through Pi's `subagent` tool when an adversarial review pass adds value.

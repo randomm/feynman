@@ -1,12 +1,28 @@
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { verifyFileSha256 } from "./lib/runtime-workspace-integrity.mjs";
+import {
+	createDeterministicTarGz,
+	createDeterministicZip,
+} from "./lib/deterministic-archive.mjs";
+import { resolveChildProcessCommand } from "./lib/child-process-command.mjs";
 
 const appRoot = resolve(import.meta.dirname, "..");
 const packageJson = JSON.parse(readFileSync(resolve(appRoot, "package.json"), "utf8"));
 const packageLockPath = resolve(appRoot, "package-lock.json");
-const minBundledNodeVersion = packageJson.engines?.node?.replace(/^>=/, "").trim() || process.version.slice(1);
+const minBundledNodeVersion = packageJson.engines?.node?.match(/>=\s*([0-9]+\.[0-9]+\.[0-9]+)/)?.[1] || process.version.slice(1);
+const releaseNodeVersion = readFileSync(resolve(appRoot, ".nvmrc"), "utf8").trim().replace(/^v/, "");
+const PINNED_NODE_ARCHIVE_SHA256 = {
+	"node-v24.18.0-darwin-arm64.tar.xz": "4477b9f78efb77744cf5eb57a0e9594dba66466b38b4e93fa9f35cb907a095a6",
+	"node-v24.18.0-darwin-x64.tar.xz": "4a3b6bc81542154430825128d9a279e8b364e8d90581544e506ef7579fd1ab6f",
+	"node-v24.18.0-linux-arm64.tar.xz": "58c9520501f6ae2b52d5b210444e24b9d0c029a58c5011b797bc1fe7105886f6",
+	"node-v24.18.0-linux-x64.tar.xz": "55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742",
+	"node-v24.18.0-win-arm64.zip": "f274669adb93b1fd0fbf8f21fd078609e9dcc84333d4f2718d2dde3f9a161a01",
+	"node-v24.18.0-win-x64.zip": "0ae68406b42d7725661da979b1403ec9926da205c6770827f33aac9d8f26e821",
+};
 
 function parseSemver(version) {
 	const [major = "0", minor = "0", patch = "0"] = version.split(".");
@@ -26,6 +42,10 @@ function fail(message) {
 	process.exit(1);
 }
 
+function logStep(message) {
+	console.log(`[feynman] ${message}`);
+}
+
 function resolveBundledNodeVersion() {
 	const requestedNodeVersion = process.env.FEYNMAN_BUNDLED_NODE_VERSION?.trim();
 	if (requestedNodeVersion) {
@@ -37,38 +57,20 @@ function resolveBundledNodeVersion() {
 		return requestedNodeVersion;
 	}
 
-	const currentNodeVersion = process.version.slice(1);
-	return compareSemver(parseSemver(currentNodeVersion), parseSemver(minBundledNodeVersion)) < 0
+	return compareSemver(parseSemver(releaseNodeVersion), parseSemver(minBundledNodeVersion)) < 0
 		? minBundledNodeVersion
-		: currentNodeVersion;
+		: releaseNodeVersion;
 }
 
 const bundledNodeVersion = resolveBundledNodeVersion();
 
-function resolveCommand(command) {
-	if (process.platform === "win32" && command === "npm") {
-		return "npm.cmd";
-	}
-
-	return command;
-}
-
-function spawnOptions(command, options = {}) {
-	if (process.platform === "win32" && command.endsWith(".cmd")) {
-		return {
-			shell: true,
-			...options,
-		};
-	}
-
-	return options;
-}
-
 function run(command, args, options = {}) {
-	const resolvedCommand = resolveCommand(command);
-	const result = spawnSync(resolvedCommand, args, {
+	const resolvedCommand = process.platform === "win32" && command === "npm" ? "npm.cmd" : command;
+	const invocation = resolveChildProcessCommand(resolvedCommand, args);
+	const result = spawnSync(invocation.command, invocation.args, {
 		stdio: "inherit",
-		...spawnOptions(resolvedCommand, options),
+		shell: invocation.shell,
+		windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 		...options,
 	});
 	if (result.error) {
@@ -80,11 +82,13 @@ function run(command, args, options = {}) {
 }
 
 function runCapture(command, args, options = {}) {
-	const resolvedCommand = resolveCommand(command);
-	const result = spawnSync(resolvedCommand, args, {
+	const resolvedCommand = process.platform === "win32" && command === "npm" ? "npm.cmd" : command;
+	const invocation = resolveChildProcessCommand(resolvedCommand, args);
+	const result = spawnSync(invocation.command, invocation.args, {
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "pipe"],
-		...spawnOptions(resolvedCommand, options),
+		shell: invocation.shell,
+		windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 		...options,
 	});
 	if (result.error) {
@@ -95,6 +99,14 @@ function runCapture(command, args, options = {}) {
 		fail(`${resolvedCommand} ${args.join(" ")} failed: ${errorOutput}`);
 	}
 	return result.stdout.trim();
+}
+
+function commandExists(command) {
+	const result = spawnSync(process.platform === "win32" ? "where" : "command", process.platform === "win32" ? [command] : ["-v", command], {
+		stdio: "ignore",
+		shell: process.platform !== "win32",
+	});
+	return result.status === 0;
 }
 
 function detectTarget() {
@@ -164,10 +176,12 @@ function nodeArchiveName(target) {
 }
 
 function ensureBundledWorkspace() {
+	logStep("preparing bundled runtime workspace...");
 	run(process.execPath, [resolve(appRoot, "scripts", "prepare-runtime-workspace.mjs")], { cwd: appRoot });
 }
 
 function copyPackageFiles(appDir) {
+	logStep("copying package files...");
 	const releaseDir = resolve(appRoot, "dist", "release");
 	cpSync(resolve(appRoot, "package.json"), resolve(appDir, "package.json"));
 	for (const entry of packageJson.files) {
@@ -186,6 +200,7 @@ function copyPackageFiles(appDir) {
 }
 
 function installAppDependencies(appDir, stagingRoot) {
+	logStep("installing production dependencies...");
 	const depsDir = resolve(stagingRoot, "prod-deps");
 	rmSync(depsDir, { recursive: true, force: true });
 	mkdirSync(depsDir, { recursive: true });
@@ -236,9 +251,23 @@ function installBundledNode(bundleRoot, target, stagingRoot) {
 	const archiveName = nodeArchiveName(target);
 	const archivePath = resolve(stagingRoot, archiveName);
 	const url = `https://nodejs.org/dist/v${bundledNodeVersion}/${archiveName}`;
+	const expectedSha256 =
+		process.env.FEYNMAN_BUNDLED_NODE_SHA256?.trim() ||
+		PINNED_NODE_ARCHIVE_SHA256[archiveName];
+	if (!expectedSha256) {
+		fail(
+			`no trusted SHA-256 is configured for ${archiveName}; set FEYNMAN_BUNDLED_NODE_SHA256 for an intentional override`,
+		);
+	}
 
+	logStep(`downloading Node.js ${bundledNodeVersion} for ${target.id}...`);
 	run("curl", ["-fsSL", url, "-o", archivePath]);
+	const actualSha256 = createHash("sha256").update(readFileSync(archivePath)).digest("hex");
+	if (actualSha256 !== expectedSha256) {
+		fail(`Node.js archive SHA-256 mismatch for ${archiveName}: expected ${expectedSha256}, found ${actualSha256}`);
+	}
 
+	logStep("extracting bundled Node.js...");
 	const extractRoot = resolve(stagingRoot, "node-dist");
 	mkdirSync(extractRoot, { recursive: true });
 	if (archiveName.endsWith(".zip")) {
@@ -252,6 +281,7 @@ function installBundledNode(bundleRoot, target, stagingRoot) {
 }
 
 function writeLauncher(bundleRoot, target) {
+	logStep("writing launchers...");
 	if (target.launcher === "unix") {
 		const launcherPath = resolve(bundleRoot, "feynman");
 		writeFileSync(
@@ -293,65 +323,112 @@ function writeLauncher(bundleRoot, target) {
 }
 
 function validateBundle(bundleRoot, target) {
+	logStep("validating bundled native dependencies...");
 	const nodeExecutable =
 		target.launcher === "windows"
 			? resolve(bundleRoot, "node", "node.exe")
 			: resolve(bundleRoot, "node", "bin", "node");
 
-	run(nodeExecutable, ["-e", "require('./app/.feynman/npm/node_modules/better-sqlite3'); console.log('better-sqlite3 ok')"], {
-		cwd: bundleRoot,
-	});
+	const betterSqlitePackageJson = resolve(bundleRoot, "app", ".feynman", "npm", "node_modules", "better-sqlite3", "package.json");
+	if (!existsSync(betterSqlitePackageJson)) {
+		logStep("skipping better-sqlite3 validation; sqlite-backed packages are not bundled for this Node runtime");
+	} else {
+		run(nodeExecutable, ["-e", "require('./app/.feynman/npm/node_modules/better-sqlite3'); console.log('better-sqlite3 ok')"], {
+			cwd: bundleRoot,
+		});
+	}
+
+	const launchers = target.launcher === "windows"
+		? [
+			{ command: resolve(bundleRoot, "feynman.cmd"), prefix: [] },
+			{
+				command: "powershell",
+				prefix: [
+					"-NoProfile",
+					"-ExecutionPolicy",
+					"Bypass",
+					"-File",
+					resolve(bundleRoot, "feynman.ps1"),
+				],
+			},
+		]
+		: [{ command: resolve(bundleRoot, "feynman"), prefix: [] }];
+
+	for (const launcher of launchers) {
+		const versionOutput = runCapture(
+			launcher.command,
+			[...launcher.prefix, "--version"],
+			{ cwd: bundleRoot },
+		);
+		if (versionOutput.split(/\r?\n/).at(-1)?.trim() !== packageJson.version) {
+			fail(`native launcher version mismatch for ${launcher.command}: ${versionOutput}`);
+		}
+		const helpOutput = runCapture(
+			launcher.command,
+			[...launcher.prefix, "--help"],
+			{ cwd: bundleRoot },
+		);
+		if (!helpOutput.trim()) {
+			fail(`native launcher returned empty help: ${launcher.command}`);
+		}
+	}
 }
 
-function packBundle(bundleRoot, target, outDir) {
+async function packBundle(bundleRoot, target, outDir) {
+	logStep("packing native bundle...");
 	const archiveName = `${basename(bundleRoot)}.${target.bundleExtension}`;
 	const archivePath = resolve(outDir, archiveName);
 	rmSync(archivePath, { force: true });
 
 	if (target.bundleExtension === "zip") {
-		if (process.platform === "win32") {
-			const bundleDir = dirname(bundleRoot).replace(/'/g, "''");
-			const bundleName = basename(bundleRoot).replace(/'/g, "''");
-			run("powershell", [
-				"-NoProfile",
-				"-Command",
-				`Push-Location '${bundleDir}'; Compress-Archive -Path '${bundleName}' -DestinationPath '${archivePath.replace(/'/g, "''")}' -Force; Pop-Location`,
-			]);
-		} else {
-			run("zip", ["-qr", archivePath, basename(bundleRoot)], { cwd: resolve(bundleRoot, "..") });
+		if (process.platform === "win32" && !commandExists("7z")) {
+			fail("7z is required to create deterministic Windows release archives");
 		}
-		return archivePath;
+		return createDeterministicZip(bundleRoot, archivePath);
 	}
 
-	run("tar", ["-czf", archivePath, basename(bundleRoot)], { cwd: resolve(bundleRoot, "..") });
-	return archivePath;
+	return await createDeterministicTarGz(bundleRoot, archivePath);
 }
 
-function main() {
+async function main() {
 	const target = detectTarget();
 	const stagingRoot = mkdtempSync(join(tmpdir(), "feynman-native-"));
 	const outDir = resolve(appRoot, "dist", "release");
 	const bundleRoot = resolve(stagingRoot, `feynman-${packageJson.version}-${target.id}`);
 	const appDir = resolve(bundleRoot, "app");
 
-	mkdirSync(outDir, { recursive: true });
-	mkdirSync(appDir, { recursive: true });
+	try {
+		mkdirSync(outDir, { recursive: true });
+		mkdirSync(appDir, { recursive: true });
 
-	ensureBundledWorkspace();
-	copyPackageFiles(appDir);
-	installAppDependencies(appDir, stagingRoot);
+		ensureBundledWorkspace();
+		copyPackageFiles(appDir);
+		installAppDependencies(appDir, stagingRoot);
 
-	const appFeynmanDir = resolve(appDir, ".feynman");
-	extractTarball(resolve(appFeynmanDir, "runtime-workspace.tgz"), appFeynmanDir, "-xzf");
-	rmSync(resolve(appFeynmanDir, "runtime-workspace.tgz"), { force: true });
-	run(process.execPath, [resolve(appDir, "scripts", "patch-embedded-pi.mjs")], { cwd: appDir });
+		const appFeynmanDir = resolve(appDir, ".feynman");
+		logStep("extracting runtime workspace...");
+		const runtimeArchivePath = resolve(appFeynmanDir, "runtime-workspace.tgz");
+		const runtimeArchiveDigestPath = resolve(appFeynmanDir, "runtime-workspace.sha256");
+		if (!verifyFileSha256(runtimeArchivePath, runtimeArchiveDigestPath)) {
+			fail("runtime workspace archive failed its SHA-256 integrity check");
+		}
+		extractTarball(runtimeArchivePath, appFeynmanDir, "-xzf");
+		logStep("patching embedded Pi runtime...");
+		run(process.execPath, [resolve(appDir, "scripts", "patch-embedded-pi.mjs")], { cwd: appDir });
+		run(process.execPath, [resolve(appDir, "scripts", "verify-package-artifact.mjs"), appDir], { cwd: appDir });
+		run("npm", ["audit", "--omit=dev", "--no-fund"], { cwd: appDir });
+		rmSync(runtimeArchivePath, { force: true });
+		rmSync(runtimeArchiveDigestPath, { force: true });
 
-	installBundledNode(bundleRoot, target, stagingRoot);
-	writeLauncher(bundleRoot, target);
-	validateBundle(bundleRoot, target);
+		installBundledNode(bundleRoot, target, stagingRoot);
+		writeLauncher(bundleRoot, target);
+		validateBundle(bundleRoot, target);
 
-	const archivePath = packBundle(bundleRoot, target, outDir);
-	console.log(`[feynman] native bundle ready: ${archivePath}`);
+		const archivePath = await packBundle(bundleRoot, target, outDir);
+		console.log(`[feynman] native bundle ready: ${archivePath}`);
+	} finally {
+		rmSync(stagingRoot, { recursive: true, force: true });
+	}
 }
 
-main();
+await main();

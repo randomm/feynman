@@ -1,27 +1,43 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { ModelRegistry, type PackageSource } from "@mariozechner/pi-coding-agent";
+import type { ModelRegistry, ModelRuntime, PackageSource } from "@earendil-works/pi-coding-agent";
 
-import { CORE_PACKAGE_SOURCES, shouldPruneLegacyDefaultPackages } from "./package-presets.js";
-import { createModelRegistry } from "../model/registry.js";
+import { CORE_PACKAGE_SOURCES, filterPackageSourcesForCurrentNode, shouldPruneLegacyDefaultPackages } from "./package-presets.js";
+import { choosePreferredModelRecord, getAvailableModelRecords, isProClassModelSpec } from "../model/catalog.js";
 
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
-export function parseModelSpec(spec: string, modelRegistry: ModelRegistry) {
+type ModelLookup = Pick<ModelRegistry, "find"> | Pick<ModelRuntime, "getModel">;
+
+function findModel(modelLookup: ModelLookup, provider: string, id: string) {
+	return "find" in modelLookup
+		? modelLookup.find(provider, id)
+		: modelLookup.getModel(provider, id);
+}
+
+export function parseModelSpec(spec: string, modelLookup: ModelLookup) {
 	const trimmed = spec.trim();
-	const separator = trimmed.includes(":") ? ":" : trimmed.includes("/") ? "/" : null;
-	if (!separator) {
-		return undefined;
+	for (const separator of ["/", ":"] as const) {
+		const separatorIndex = trimmed.indexOf(separator);
+		if (separatorIndex <= 0 || separatorIndex === trimmed.length - 1) {
+			continue;
+		}
+
+		const provider = trimmed.slice(0, separatorIndex);
+		const id = trimmed.slice(separatorIndex + 1);
+		const model = findModel(modelLookup, provider, id);
+		if (model) {
+			return model;
+		}
 	}
 
-	const [provider, ...rest] = trimmed.split(separator);
-	const id = rest.join(separator);
-	if (!provider || !id) {
-		return undefined;
-	}
+	return undefined;
+}
 
-	return modelRegistry.find(provider, id);
+export function canonicalizeModelSpec(spec: string, modelLookup: ModelLookup): string | undefined {
+	const model = parseModelSpec(spec, modelLookup);
+	return model ? `${model.provider}/${model.id}` : undefined;
 }
 
 export function normalizeThinkingLevel(value: string | undefined): ThinkingLevel | undefined {
@@ -36,7 +52,8 @@ export function normalizeThinkingLevel(value: string | undefined): ThinkingLevel
 		normalized === "low" ||
 		normalized === "medium" ||
 		normalized === "high" ||
-		normalized === "xhigh"
+		normalized === "xhigh" ||
+		normalized === "max"
 	) {
 		return normalized;
 	}
@@ -44,27 +61,21 @@ export function normalizeThinkingLevel(value: string | undefined): ThinkingLevel
 	return undefined;
 }
 
-function choosePreferredModel(
-	availableModels: Array<{ provider: string; id: string }>,
-): { provider: string; id: string } | undefined {
-	const preferences = [
-		{ provider: "anthropic", id: "claude-opus-4-6" },
-		{ provider: "anthropic", id: "claude-opus-4-5" },
-		{ provider: "anthropic", id: "claude-sonnet-4-5" },
-		{ provider: "openai", id: "gpt-5.4" },
-		{ provider: "openai", id: "gpt-5" },
-	];
-
-	for (const preferred of preferences) {
-		const match = availableModels.find(
-			(model) => model.provider === preferred.provider && model.id === preferred.id,
-		);
-		if (match) {
-			return match;
-		}
+function filterConfiguredPackagesForCurrentNode(packages: PackageSource[] | undefined): PackageSource[] {
+	if (!Array.isArray(packages)) {
+		return [];
 	}
 
-	return availableModels[0];
+	const filteredStringSources = new Set(filterPackageSourcesForCurrentNode(
+		packages
+			.map((entry) => (typeof entry === "string" ? entry : entry.source))
+			.filter((entry): entry is string => typeof entry === "string"),
+	));
+
+	return packages.filter((entry) => {
+		const source = typeof entry === "string" ? entry : entry.source;
+		return filteredStringSources.has(source);
+	});
 }
 
 export function readJson(path: string): Record<string, unknown> {
@@ -74,17 +85,22 @@ export function readJson(path: string): Record<string, unknown> {
 
 	try {
 		return JSON.parse(readFileSync(path, "utf8"));
-	} catch {
+	} catch (error) {
+		if (process.env.FEYNMAN_DEBUG === "1") {
+			process.stderr.write(
+				`[feynman] warning: failed to parse ${path}, treating as empty (${error instanceof Error ? error.message : "unknown error"})\n`,
+			);
+		}
 		return {};
 	}
 }
 
-export function normalizeFeynmanSettings(
+export async function normalizeFeynmanSettings(
 	settingsPath: string,
 	bundledSettingsPath: string,
 	defaultThinkingLevel: ThinkingLevel,
 	authPath: string,
-): void {
+): Promise<void> {
 	let settings: Record<string, unknown> = {};
 
 	if (existsSync(settingsPath)) {
@@ -110,24 +126,35 @@ export function normalizeFeynmanSettings(
 	settings.theme = "feynman";
 	settings.quietStartup = true;
 	settings.collapseChangelog = true;
+	const supportedCorePackages = filterPackageSourcesForCurrentNode(CORE_PACKAGE_SOURCES);
 	if (!Array.isArray(settings.packages) || settings.packages.length === 0) {
-		settings.packages = [...CORE_PACKAGE_SOURCES];
+		settings.packages = supportedCorePackages;
 	} else if (shouldPruneLegacyDefaultPackages(settings.packages as PackageSource[])) {
-		settings.packages = [...CORE_PACKAGE_SOURCES];
+		settings.packages = supportedCorePackages;
+	} else {
+		settings.packages = filterConfiguredPackagesForCurrentNode(settings.packages as PackageSource[]);
 	}
 
-	const modelRegistry = createModelRegistry(authPath);
-	const availableModels = modelRegistry.getAvailable().map((model) => ({
+	const availableModels = (await getAvailableModelRecords(authPath)).map((model) => ({
 		provider: model.provider,
 		id: model.id,
 	}));
+	const availableModelSpecs = new Set(availableModels.map((model) => `${model.provider}/${model.id}`));
 
-	if ((!settings.defaultProvider || !settings.defaultModel) && availableModels.length > 0) {
-		const preferredModel = choosePreferredModel(availableModels);
+	const defaultModelSpec = typeof settings.defaultProvider === "string" && typeof settings.defaultModel === "string"
+		? `${settings.defaultProvider}/${settings.defaultModel}`
+		: undefined;
+	const defaultIsProClass = isProClassModelSpec(defaultModelSpec);
+	const defaultUnavailable = Boolean(defaultModelSpec && !availableModelSpecs.has(defaultModelSpec));
+	if ((!settings.defaultProvider || !settings.defaultModel || defaultIsProClass || defaultUnavailable) && availableModels.length > 0) {
+		const preferredModel = choosePreferredModelRecord(availableModels);
 		if (preferredModel) {
 			settings.defaultProvider = preferredModel.provider;
 			settings.defaultModel = preferredModel.id;
 		}
+	} else if (defaultIsProClass) {
+		delete settings.defaultProvider;
+		delete settings.defaultModel;
 	}
 
 	mkdirSync(dirname(settingsPath), { recursive: true });

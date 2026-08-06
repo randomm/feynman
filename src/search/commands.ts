@@ -13,16 +13,27 @@ const PROVIDER_API_KEY_FIELDS: Partial<Record<PiWebSearchProvider, keyof PiWebAc
 	gemini: "geminiApiKey",
 };
 
-export function printSearchStatus(): void {
-	const status = getPiWebAccessStatus();
+export function printSearchStatus(status = getPiWebAccessStatus()): void {
+	const configPathSuffix = status.configExists ? "" : " (not created yet)";
 	printInfo("Managed by: pi-web-access");
 	printInfo(`Search route: ${status.routeLabel}`);
 	printInfo(`Request route: ${status.requestProvider}`);
+	printInfo(`Search workflow: ${status.workflow}`);
 	printInfo(`Perplexity API configured: ${status.perplexityConfigured ? "yes" : "no"}`);
 	printInfo(`Exa API configured: ${status.exaConfigured ? "yes" : "no"}`);
 	printInfo(`Gemini API configured: ${status.geminiApiConfigured ? "yes" : "no"}`);
-	printInfo(`Browser profile: ${status.chromeProfile ?? "default Chromium profile"}`);
-	printInfo(`Config path: ${status.configPath}`);
+	printInfo(`Gemini browser fallback: ${status.geminiBrowserEnabled ? "enabled" : "disabled"}`);
+	if (status.geminiBrowserEnabled && status.chromeProfile) {
+		printInfo(`Gemini browser profile: ${status.chromeProfile}`);
+	}
+	printInfo(`Config path: ${status.configPath}${configPathSuffix}`);
+	if (!status.configExists) {
+		printInfo("Not configured yet. Run one of:");
+		printInfo("  feynman search set auto");
+		printInfo("  feynman search set perplexity <api-key>");
+		printInfo("  feynman search set exa <api-key>");
+		printInfo("  feynman search set gemini <api-key>");
+	}
 }
 
 export function setSearchProvider(provider: PiWebSearchProvider, apiKey?: string): void {
@@ -36,6 +47,8 @@ export function setSearchProvider(provider: PiWebSearchProvider, apiKey?: string
 	const updates: Partial<Record<keyof PiWebAccessConfig, unknown>> = {
 		provider,
 		searchProvider: provider,
+		workflow: "none",
+		geminiBrowser: false,
 		route: undefined,
 	};
 	const apiKeyField = PROVIDER_API_KEY_FIELDS[provider];
@@ -50,7 +63,13 @@ export function setSearchProvider(provider: PiWebSearchProvider, apiKey?: string
 }
 
 export function clearSearchConfig(): void {
-	savePiWebAccessConfig({ provider: undefined, searchProvider: undefined, route: undefined });
+	savePiWebAccessConfig({
+		provider: undefined,
+		searchProvider: undefined,
+		route: undefined,
+		workflow: "none",
+		geminiBrowser: false,
+	});
 
 	const status = getPiWebAccessStatus();
 	console.log(`Web search provider reset to ${status.routeLabel}.`);

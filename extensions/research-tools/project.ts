@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, relative, resolve as resolvePath } from "node:path";
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { getExtensionCommandSpec } from "../../metadata/commands.mjs";
 import { buildProjectAgentsTemplate, buildSessionLogsReadme } from "./project-scaffold.js";

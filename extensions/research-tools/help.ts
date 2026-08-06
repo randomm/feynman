@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	extensionCommandSpecs,
 	formatSlashUsage,
@@ -64,7 +64,7 @@ function buildHelpSections(pi: ExtensionAPI): HelpSection[] {
 		"Project & Session",
 		"Setup",
 		"Agents & Delegation",
-		"Bundled Package Commands",
+		"Live Package Commands",
 	]
 		.map((title) => ({ title, commands: sections.get(title) ?? [] }))
 		.filter((section) => section.commands.length > 0);

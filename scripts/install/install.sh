@@ -164,6 +164,19 @@ require_command() {
   fi
 }
 
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+    return
+  fi
+  echo "sha256sum or shasum is required to verify the Feynman download." >&2
+  exit 1
+}
+
 warn_command_conflict() {
   expected_path="$INSTALL_BIN_DIR/feynman"
   resolved_path="$(command -v feynman 2>/dev/null || true)"
@@ -185,7 +198,7 @@ resolve_release_metadata() {
   normalized_version="$(normalize_version "$VERSION")"
 
   if [ "$normalized_version" = "latest" ]; then
-    release_page="$(download_text "https://github.com/getcompanion-ai/feynman/releases/latest")"
+    release_page="$(download_text "https://github.com/companion-inc/feynman/releases/latest")"
     resolved_version="$(printf '%s\n' "$release_page" | sed -n 's@.*releases/tag/v\([0-9][^"<>[:space:]]*\).*@\1@p' | head -n 1)"
 
     if [ -z "$resolved_version" ]; then
@@ -198,9 +211,11 @@ resolve_release_metadata() {
 
   bundle_name="feynman-${resolved_version}-${asset_target}"
   archive_name="${bundle_name}.${archive_extension}"
-  download_url="${FEYNMAN_INSTALL_BASE_URL:-https://github.com/getcompanion-ai/feynman/releases/download/v${resolved_version}}/${archive_name}"
+  release_base_url="${FEYNMAN_INSTALL_BASE_URL:-https://github.com/companion-inc/feynman/releases/download/v${resolved_version}}"
+  download_url="${release_base_url}/${archive_name}"
+  checksums_url="${release_base_url}/SHA256SUMS"
 
-  printf '%s\n%s\n%s\n%s\n' "$resolved_version" "$bundle_name" "$archive_name" "$download_url"
+  printf '%s\n%s\n%s\n%s\n%s\n' "$resolved_version" "$bundle_name" "$archive_name" "$download_url" "$checksums_url"
 }
 
 case "$(uname -s)" in
@@ -239,6 +254,7 @@ resolved_version="$(printf '%s\n' "$release_metadata" | sed -n '1p')"
 bundle_name="$(printf '%s\n' "$release_metadata" | sed -n '2p')"
 archive_name="$(printf '%s\n' "$release_metadata" | sed -n '3p')"
 download_url="$(printf '%s\n' "$release_metadata" | sed -n '4p')"
+checksums_url="$(printf '%s\n' "$release_metadata" | sed -n '5p')"
 
 step "Installing Feynman ${resolved_version} for ${asset_target}"
 
@@ -261,23 +277,102 @@ This usually means the release exists, but not all platform bundles were uploade
 Workarounds:
   - try again after the release finishes publishing
   - pass the latest published version explicitly, e.g.:
-    curl -fsSL https://feynman.is/install | bash -s -- 0.2.16
+    curl -fsSL https://feynman.is/install | bash -s -- 0.2.31
 EOF
   exit 1
 fi
 
-mkdir -p "$INSTALL_APP_DIR"
-rm -rf "$INSTALL_APP_DIR/$bundle_name"
-run_with_spinner "Extracting ${archive_name}" tar -xzf "$archive_path" -C "$INSTALL_APP_DIR"
+checksums_path="$tmp_dir/SHA256SUMS"
+step "Verifying ${archive_name}"
+download_file "$checksums_url" "$checksums_path"
+checksum_matches="$(awk -v name="$archive_name" '$2 == name || $2 == "*" name { print $1 }' "$checksums_path")"
+checksum_count="$(printf '%s\n' "$checksum_matches" | awk 'NF { count += 1 } END { print count + 0 }')"
+if [ "$checksum_count" -ne 1 ]; then
+  if [ "$checksum_count" -eq 0 ]; then
+    echo "SHA256SUMS does not contain a valid checksum for ${archive_name}." >&2
+  else
+    echo "SHA256SUMS contains multiple checksum entries for ${archive_name}." >&2
+  fi
+  exit 1
+fi
+expected_checksum="$(printf '%s\n' "$checksum_matches" | sed -n '1p')"
+case "$expected_checksum" in
+  "" | *[!0-9a-fA-F]*)
+    echo "SHA256SUMS does not contain a valid checksum for ${archive_name}." >&2
+    exit 1
+    ;;
+esac
+if [ "${#expected_checksum}" -ne 64 ]; then
+  echo "SHA256SUMS contains a malformed checksum for ${archive_name}." >&2
+  exit 1
+fi
+actual_checksum="$(sha256_file "$archive_path")"
+if [ "$actual_checksum" != "$expected_checksum" ]; then
+  echo "SHA-256 mismatch for ${archive_name}: expected ${expected_checksum}, found ${actual_checksum}." >&2
+  exit 1
+fi
 
+extract_root="$tmp_dir/extract"
+mkdir -p "$extract_root"
+run_with_spinner "Extracting ${archive_name}" tar -xzf "$archive_path" -C "$extract_root"
+candidate_bundle="$extract_root/$bundle_name"
+if [ ! -x "$candidate_bundle/feynman" ]; then
+  echo "Downloaded archive did not contain the expected executable: ${bundle_name}/feynman" >&2
+  exit 1
+fi
+candidate_version="$("$candidate_bundle/feynman" --version | tail -n 1)"
+if [ "$candidate_version" != "$resolved_version" ]; then
+  echo "Downloaded bundle version mismatch: expected ${resolved_version}, found ${candidate_version}." >&2
+  exit 1
+fi
+"$candidate_bundle/feynman" --help >/dev/null
+
+mkdir -p "$INSTALL_APP_DIR"
 mkdir -p "$INSTALL_BIN_DIR"
+bundle_dir="$INSTALL_APP_DIR/$bundle_name"
+backup_dir="$tmp_dir/previous-bundle"
+had_previous=0
+if [ -e "$bundle_dir" ]; then
+  mv "$bundle_dir" "$backup_dir"
+  had_previous=1
+fi
+if ! mv "$candidate_bundle" "$bundle_dir"; then
+  if [ "$had_previous" -eq 1 ]; then
+    mv "$backup_dir" "$bundle_dir"
+  fi
+  echo "Failed to install the validated Feynman bundle." >&2
+  exit 1
+fi
+
 step "Linking feynman into $INSTALL_BIN_DIR"
-cat >"$INSTALL_BIN_DIR/feynman" <<EOF
+shim_candidate="$tmp_dir/feynman-shim"
+if ! cat >"$shim_candidate" <<EOF
 #!/bin/sh
 set -eu
 exec "$INSTALL_APP_DIR/$bundle_name/feynman" "\$@"
 EOF
-chmod 0755 "$INSTALL_BIN_DIR/feynman"
+then
+  rm -rf "$bundle_dir"
+  if [ "$had_previous" -eq 1 ]; then
+    mv "$backup_dir" "$bundle_dir"
+  fi
+  exit 1
+fi
+chmod 0755 "$shim_candidate"
+if ! mv "$shim_candidate" "$INSTALL_BIN_DIR/feynman"; then
+  rm -rf "$bundle_dir"
+  if [ "$had_previous" -eq 1 ]; then
+    mv "$backup_dir" "$bundle_dir"
+  fi
+  exit 1
+fi
+rm -rf "$backup_dir"
+
+for old_bundle in "$INSTALL_APP_DIR"/feynman-*; do
+  if [ -d "$old_bundle" ] && [ "$old_bundle" != "$bundle_dir" ]; then
+    rm -rf "$old_bundle"
+  fi
+done
 
 add_to_path
 

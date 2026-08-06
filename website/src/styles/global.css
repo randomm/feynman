@@ -183,6 +183,8 @@
 
 .prose pre {
   position: relative;
+  box-sizing: border-box;
+  max-width: 100%;
   border-radius: 0.5rem;
   padding: 1rem 1.25rem;
   overflow-x: auto;
@@ -191,21 +193,31 @@
   font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
   font-size: 0.875rem;
   line-height: 1.7;
-  background-color: var(--card) !important;
+  border: 1px solid var(--border);
+  background-color: var(--secondary) !important;
   color: var(--card-foreground);
 }
 
 .prose .astro-code {
   position: relative !important;
-  background-color: var(--card) !important;
+  box-sizing: border-box;
+  max-width: 100%;
+  overflow-x: auto;
+  background-color: var(--secondary) !important;
   color: var(--card-foreground) !important;
 }
 
 .prose pre code {
+  display: inline-block;
+  min-width: max-content;
   background: none !important;
   border: none;
   padding: 0;
-  color: var(--card-foreground);
+  color: inherit;
+}
+
+.prose .astro-code span {
+  background-color: transparent !important;
 }
 
 .prose pre .copy-code {
@@ -267,7 +279,10 @@
 }
 
 .prose table {
+  display: block;
   width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
   border-collapse: collapse;
   margin-bottom: 1.5rem;
   font-size: 0.9rem;
@@ -327,12 +342,11 @@
 }
 
 .dark .astro-code {
-  background-color: var(--card) !important;
+  background-color: var(--secondary) !important;
 }
 
 .dark .astro-code code span {
   color: var(--shiki-dark) !important;
-  background-color: var(--shiki-dark-bg) !important;
   font-style: var(--shiki-dark-font-style) !important;
   font-weight: var(--shiki-dark-font-weight) !important;
   text-decoration: var(--shiki-dark-text-decoration) !important;
