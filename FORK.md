@@ -122,8 +122,9 @@ git merge upstream/main
 
 # 4. Resolve — see the policy table below
 # 5. Re-apply the frontmatter allowlists (step 4 policy)
-# 6. Wipe the stale runtime workspace (MANDATORY — see Hazards)
-rm -rf .feynman/npm
+# 6. Refresh BOTH stale runtime roots (MANDATORY — see Hazards)
+rm -rf .feynman/npm                      # project root; rebuilds on next launch
+feynman update                           # user-global root at ~/.feynman/npm-global
 
 # 7. Toolchain + verify
 fnm install "$(cat .nvmrc)" && fnm use
@@ -159,20 +160,36 @@ side wholesale would delete them and quietly reduce the agent's capability.
 
 Ranked by how much time they cost when missed.
 
-### 1. Stale `.feynman/npm` runtime workspace — **wipe it every sync**
+### 1. Stale runtime roots — **there are TWO, and a merge refreshes neither**
 
-`.feynman/npm/` is a gitignored ~500 MB package install root. It is **not** refreshed by a
-merge, so after a sync it still holds the *previous* Pi runtime. `scripts/patch-embedded-pi.mjs`
-patches whatever it finds there, and against an old Pi it dies with:
+Pi packages live outside git, so `git merge` does nothing to them. After a sync they still hold
+the *previous* runtime, and Feynman's patchers refuse to operate on a version they don't expect.
+Both must be refreshed, every sync:
+
+| Root | Scope | Refresh with |
+|---|---|---|
+| `<repo>/.feynman/npm/` | project (gitignored, ~500 MB) | `rm -rf .feynman/npm` — rebuilds on next launch |
+| `~/.feynman/npm-global/lib/node_modules/` | **user-global, shared by every project** | `feynman update` |
+
+Symptoms, both of which look like merge bugs and are not:
 
 ```
+# stale project root:
 Error: Unsupported Pi ModelRegistry layout: required request-auth patch anchors were not found
+
+# stale global root:
+Unsupported pi-web-access patch ~/.feynman/npm-global/lib/node_modules/pi-web-access:
+expected 0.18.0, found 0.10.6
 ```
 
-This looks like a code bug in the merge. It is not. **`rm -rf .feynman/npm`** and let it rebuild
-(`feynman doctor` or the next launch repopulates it). Observed on the 2026-08 sync: the April
-workspace still held `@mariozechner/pi-coding-agent@0.66.1` while the repo had moved to
-`@earendil-works/…@0.83.0`.
+Observed on the 2026-08 sync: the project root still held
+`@mariozechner/pi-coding-agent@0.66.1` (repo had moved to `@earendil-works/…@0.83.0`), and the
+global root held `pi-web-access@0.10.6`, `pi-subagents@0.14.1`, `pi-btw@0.3.7`,
+`pi-docparser@1.1.1` — all April-era.
+
+Prefer **`feynman update`** over deleting the global root: it upgrades the pinned core packages
+in place and leaves optional packages you installed (memory, session-search, charts, zotero…)
+alone. Deleting `~/.feynman/npm-global` wholesale would take those with it.
 
 ### 2. Pi runtime package renames break `parallel.ts`
 
