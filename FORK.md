@@ -1,162 +1,292 @@
 # Fork Manifest
 
-This repository is a fork of [`getcompanion-ai/feynman`](https://github.com/getcompanion-ai/feynman).
+Private fork of **[`companion-inc/feynman`](https://github.com/companion-inc/feynman)**.
 
-This file tracks all fork-specific customisations — what changed, why, which files are affected, and what to watch for when syncing with upstream.
+> The old `getcompanion-ai/feynman` URL still works but is a **redirect**. Always use
+> `companion-inc/feynman` — the GitHub API returns `getcompanion-ai` paths as `404` in some
+> forms, which silently produces wrong answers when scripting against it.
 
-## Installing This Fork
+This fork is **not** upstreamed. Nothing here is intended for a PR to `companion-inc`. The only
+reason it exists is to keep the **parallel-cli (parallel.ai) web search integration** working.
+Everything else should track upstream exactly.
 
-This fork runs directly from source via Node.js. There is no binary to download.
+## Sync State
 
-### Prerequisites
+| | |
+|---|---|
+| Last synced | **2026-08-06** |
+| Upstream commit | `daa7f47` (`main`, package version `0.3.12`) |
+| Upstream tag line | v0.3.11 |
+| Previous sync | 2026-04-11 at `b3a82d4` (v0.2.17) — 180 commits of drift |
 
-- Node.js ≥ 18 (check: `node --version`)
-- npm (bundled with Node.js)
+**Update this table on every sync.** It is the only record of where the fork sits.
 
-### First-time setup
+---
+
+## Guiding Principle
+
+> **Take upstream verbatim for everything except the five files listed below.
+> Never re-apply a fork edit to agent *prose*, only to the frontmatter `tools:` allowlist.**
+
+Upstream actively rewrites the agent prompts (`researcher.md`, `verifier.md`, `SYSTEM.md`).
+An earlier version of this fork overrode that prose, which meant every sync had to hand-merge
+upstream's prompt improvements, and it silently dropped new upstream tools. That is retired —
+see [Retired Customisations](#retired-customisations).
+
+---
+
+## Prerequisites
+
+| Requirement | Notes |
+|---|---|
+| **Node**, version from `.nvmrc` | Managed by **`fnm`** on this host (Homebrew), initialized in `~/dotfiles/zsh/configs/tools.zsh` via `eval "$(fnm env --use-on-cd)"`. It auto-switches on `cd` from `.nvmrc`. |
+| **`parallel-cli`** on `$PATH` | **The whole point of this fork.** `extensions/parallel-search/parallel.ts` shells out to a binary literally named `parallel-cli`. Without it every `parallel_*` tool call fails with `ENOENT`. |
+| npm | Bundled with Node. |
+
+### Node gotcha
+
+`fnm` only auto-switches to a version **it already has installed**. If `.nvmrc` names a version
+you lack, `fnm` prints a notice and leaves you on the previous version — the build then fails in
+confusing ways. **After every sync**, `.nvmrc` may have moved:
 
 ```bash
-# 1. Clone the fork
-git clone <fork-repo-url> ~/projects/feynman
-cd ~/projects/feynman
+fnm install "$(cat .nvmrc)"   # no-op if already present
+fnm use                       # or just cd out and back in
+node -v                       # must match .nvmrc exactly
+```
 
-# 2. Install dependencies
-npm install
+### Running the fork
 
-# 3. Build the TypeScript sources
-npm run build
+This fork runs from source; there is no binary. The `feynman` command is a wrapper:
 
-# 4. Wire the feynman command to the fork
-#    Choose the directory that is already on your PATH, or add a new one.
-#    Common choices: ~/.local/bin  /usr/local/bin  ~/bin
-mkdir -p ~/.local/bin
-cat > ~/.local/bin/feynman <<'EOF'
+```sh
+# ~/.local/bin/feynman
 #!/bin/sh
 set -eu
-exec node "/absolute/path/to/feynman/bin/feynman.js" "$@"
-EOF
-chmod +x ~/.local/bin/feynman
+exec node "/Users/janni/projects/feynman/bin/feynman.js" "$@"
 ```
 
-Replace `/absolute/path/to/feynman` with the actual path where you cloned the repo
-(e.g. `/Users/yourname/projects/feynman`).
-
-If `~/.local/bin` is not on your PATH, add this to your shell profile (`~/.zshrc`, `~/.bashrc`, etc.):
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-### Overriding an existing feynman installation
-
-If you already have feynman installed (e.g. from the upstream binary installer), the
-wrapper above will override it as long as your PATH lists `~/.local/bin` before the
-directory that contains the old binary. Verify with:
-
-```bash
-which feynman        # should show ~/.local/bin/feynman
-feynman --version    # should match the version in package.json
-```
-
-### Updating the fork
-
-```bash
-cd ~/projects/feynman
-git pull
-npm install          # pick up any new/changed dependencies
-npm run build        # rebuild from source
-```
-
-No wrapper changes are needed — the wrapper always delegates to the built source in place.
+`~/.local/bin` must precede any directory holding an upstream-installed binary.
+Verify with `which feynman` and `feynman --version`.
 
 ---
 
-## Upstream Remote Setup
+## The Fork Delta
 
-Add the upstream remote (one-time setup):
+Exactly **five** files differ from upstream. Verify with:
+
 ```bash
-git remote add upstream git@github.com:getcompanion-ai/feynman.git
-git config rerere.enabled true
+git diff --name-status upstream/main HEAD    # should list only these + FORK.md
 ```
 
-`rerere` (Reuse Recorded Resolution) remembers how you resolved merge conflicts and auto-applies those resolutions in future syncs.
+| File | Risk | Change |
+|---|---|---|
+| `extensions/parallel-search/parallel.ts` | **LOW** | **New, fork-owned.** Exports `registerParallelTools(pi)`, registering `parallel_search`, `parallel_fetch`, `parallel_research`. Shells out to `parallel-cli` via `execFile` (no shell → no injection), always `--json`, 5-min timeout, 50 MB stdout cap. |
+| `tests/parallel-search.test.ts` | **LOW** | **New, fork-owned.** 13 unit tests over a mock `pi`. Runs as part of `npm test`. |
+| `extensions/research-tools.ts` | **MEDIUM** | **Two lines**: the `registerParallelTools` import and its call. Upstream adds registrations here often — it has merged cleanly so far because our lines sit in a stable alphabetical slot. |
+| `.feynman/agents/researcher.md` | **MEDIUM** | **Frontmatter `tools:` only.** Appends `parallel_search, parallel_fetch, parallel_research` to upstream's list. |
+| `.feynman/agents/verifier.md` | **MEDIUM** | **Frontmatter `tools:` only.** Appends `parallel_fetch` to upstream's list. |
+| `FORK.md` | **LOW** | This file. Upstream has no counterpart. |
 
-## Upstream Sync Runbook
+Nothing else. In particular the fork does **not** touch `package.json`, `package-lock.json`,
+`.feynman/settings.json`, `.feynman/SYSTEM.md`, `src/`, or `scripts/`. If a sync leaves a diff in
+any of those, it is accidental — revert it to upstream.
 
-Run this process when you want to pull in upstream changes:
+---
+
+## Sync Runbook
+
+One-time setup:
 
 ```bash
-# 1. Fetch latest upstream commits
-git fetch upstream
+git remote add upstream https://github.com/companion-inc/feynman.git
+git config rerere.enabled true    # remembers conflict resolutions between syncs
+```
 
-# 2. Review what changed upstream since last sync
-git log HEAD..upstream/main --oneline
+Then, for each sync:
 
-# 3. Check MEDIUM/HIGH risk files for upstream changes
-git diff HEAD..upstream/main -- .feynman/agents/researcher.md
-# Add other MEDIUM/HIGH risk files here as the fork grows
+```bash
+# 1. Clean tree, safety net
+cd ~/projects/feynman
+git status --short                       # must be empty; discard stray package-lock churn
+git tag "pre-sync-$(node -p "require('./package.json').version")"
 
-# 4. Merge upstream into main
+# 2. Fetch and review
+git fetch upstream --tags
+git log --oneline HEAD..upstream/main | wc -l        # how much drift
+git diff --stat HEAD..upstream/main -- .feynman/agents/ extensions/research-tools.ts
+
+# 3. Merge on a branch, never straight onto main
+git switch -c "chore/upstream-sync-$(date +%Y%m%d)"
 git merge upstream/main
 
-# 5. Resolve any conflicts — consult the feature entries below for each conflicted file's notes
+# 4. Resolve — see the policy table below
+# 5. Re-apply the frontmatter allowlists (step 4 policy)
+# 6. Wipe the stale runtime workspace (MANDATORY — see Hazards)
+rm -rf .feynman/npm
 
-# 6. After merge: update "Based on upstream" versions in this file
-#    and refresh Conflict notes if the upstream structure has changed
+# 7. Toolchain + verify
+fnm install "$(cat .nvmrc)" && fnm use
+npm ci && npm run typecheck && npm test && npm run build
+
+# 8. Land it
+git switch main && git merge --ff-only "chore/upstream-sync-$(date +%Y%m%d)"
+
+# 9. Update the Sync State table above, then push
 ```
 
-## Merge Risk Classification
+Rollback at any point: `git reset --hard pre-sync-<version>`.
 
-| Risk | Meaning |
-|------|---------|
-| **LOW** | Fork-owned file (new file, or in `extensions/` which upstream does not maintain). Conflicts very unlikely. |
-| **MEDIUM** | File exists upstream and is occasionally updated. Conflicts possible but resolvable. Watch at sync time. |
-| **HIGH** | Core upstream infrastructure, updated frequently. Expect conflicts every sync. May need careful manual reconciliation. |
+### Conflict resolution policy
 
-## Fork Features
+| Conflicted file | What to do |
+|---|---|
+| `.feynman/SYSTEM.md` | `git checkout --theirs` — **take upstream whole, no exceptions.** |
+| `.feynman/settings.json` | `git checkout --theirs` — **take upstream whole.** Upstream pins package versions here and `src/pi/package-presets.ts` auto-reconciles it; any edit is fought by the reconciler. |
+| `package.json`, `package-lock.json` | `git checkout --theirs` — the fork owns nothing here. |
+| `.feynman/agents/researcher.md` | Take upstream whole, then append `, parallel_search, parallel_fetch, parallel_research` to the **frontmatter `tools:` line only**. Leave all prose alone. |
+| `.feynman/agents/verifier.md` | Take upstream whole, then append `, parallel_fetch` to the **frontmatter `tools:` line only**. Leave all prose alone. |
+| `extensions/research-tools.ts` | Keep upstream's full import + registration lists, then re-insert our two lines. |
+| `extensions/parallel-search/parallel.ts`, `tests/parallel-search.test.ts` | Ours — upstream has no counterpart, so these never conflict. But they **do** silently break on runtime renames; see Hazards. |
 
----
-
-### parallel-cli web search extension
-
-- **Issue**: #1
-- **Status**: active
-- **Based on upstream**: v0.2.17
-- **Files touched**:
-  - `extensions/parallel-search/parallel.ts` (new — fork-owned)
-  - `extensions/research-tools.ts` (modified — adds registerParallelTools call)
-  - `.feynman/agents/researcher.md` (modified — updates tool preference instructions)
-- **Purpose**: Registers parallel-cli as the preferred web search backend, eliminating the need for third-party API keys (Perplexity/Exa/Gemini).
-- **Merge risk**:
-  - `extensions/parallel-search/parallel.ts` — **LOW** (new fork-owned file, upstream will never have it)
-  - `extensions/research-tools.ts` — **MEDIUM** (file exists upstream; we added one import and one registerTool call — upstream may add imports/calls that conflict)
-  - `.feynman/agents/researcher.md` — **MEDIUM** (upstream actively refines agent prompts; our tool-preference section at lines ~21-27 may conflict)
-- **Conflict notes**: If upstream changes `.feynman/agents/researcher.md`, check whether the web search instruction block (lines ~21-27) has been updated. Our change adds tool-preference ordering; upstream changes are likely additive. Keep our `parallel_search` preference and append any new upstream instructions below it. For `extensions/research-tools.ts`: upstream may add new imports or registerTool calls. Keep our `registerParallelTools(pi)` call and merge any new upstream registrations alongside it.
+Never resolve an agent file by keeping "ours". Upstream adds tools to those allowlists
+(it added `write`, `edit`, and three `hf_*` tools in the 0.2.17 → 0.3.11 window); keeping our
+side wholesale would delete them and quietly reduce the agent's capability.
 
 ---
 
-### researcher subagent: parallel tools access + subagent discovery fix
+## Hazards
 
-- **Issue**: #3 (follow-on)
-- **Status**: active
-- **Based on upstream**: v0.2.17
-- **Files touched**:
-  - `.feynman/agents/researcher.md` (modified — adds parallel tools to frontmatter allowlist)
-  - `.feynman/settings.json` (modified — removes npm:pi-subagents to restore local agent discovery)
-- **Purpose**: Enables researcher subagent to actually call parallel_search/fetch/research tools at runtime. Restores verifier/reviewer/writer subagents which were hidden by the pi-subagents npm package.
-- **Merge risk**:
-  - `.feynman/agents/researcher.md` — **MEDIUM** (upstream may update frontmatter; check tools list at sync time)
-  - `.feynman/settings.json` — **HIGH** (upstream actively manages this package list; expect conflicts at every sync — always keep `npm:pi-subagents` removed after merge)
-- **Conflict notes**: At upstream sync time, `.feynman/settings.json` will likely re-add `npm:pi-subagents`. Always remove it after merging upstream. Consider adding a comment near the packages list in settings.json if the format allows it.
+Ranked by how much time they cost when missed.
+
+### 1. Stale `.feynman/npm` runtime workspace — **wipe it every sync**
+
+`.feynman/npm/` is a gitignored ~500 MB package install root. It is **not** refreshed by a
+merge, so after a sync it still holds the *previous* Pi runtime. `scripts/patch-embedded-pi.mjs`
+patches whatever it finds there, and against an old Pi it dies with:
+
+```
+Error: Unsupported Pi ModelRegistry layout: required request-auth patch anchors were not found
+```
+
+This looks like a code bug in the merge. It is not. **`rm -rf .feynman/npm`** and let it rebuild
+(`feynman doctor` or the next launch repopulates it). Observed on the 2026-08 sync: the April
+workspace still held `@mariozechner/pi-coding-agent@0.66.1` while the repo had moved to
+`@earendil-works/…@0.83.0`.
+
+### 2. Pi runtime package renames break `parallel.ts`
+
+`parallel.ts` and its test import from the Pi runtime, and upstream has renamed these at least
+twice. Because these files are fork-owned they never conflict — they just **stop compiling**,
+and only `npm run typecheck` catches it (`npm run build` compiles `src/` only, per
+`tsconfig.build.json`).
+
+Renames absorbed so far:
+
+| Was | Now (as of 0.3.12) |
+|---|---|
+| `@mariozechner/pi-coding-agent` | `@earendil-works/pi-coding-agent` |
+| `@sinclair/typebox` | `typebox` |
+
+**At each sync, check what upstream's own extensions import** and match it:
+
+```bash
+head -3 extensions/research-tools/huggingface.ts    # canonical import style
+grep -n "^import" extensions/parallel-search/parallel.ts   # must agree
+```
+
+Upstream ships `tests/typebox-migration.test.ts`, which fails the build if any source file still
+references `@sinclair/typebox` — a useful tripwire, but it won't catch the Pi package rename.
+
+Also watch TypeBox API removals. The 1.x migration dropped `Type.Base`, `Type.Awaited`,
+`Type.Promise`, `Type.AsyncIterator`, `Type.Iterator`, `Type.Options`, and `Value.Mutate`.
+`parallel.ts` uses only `Type.Object/String/Number/Boolean/Optional`, all stable so far.
+
+### 3. Stale npm metadata cache → bogus `ETARGET`
+
+A sync can fail with:
+
+```
+npm error code ETARGET
+npm error notarget No matching version found for pi-<something>@<version>.
+[feynman] npm failed while setting up bundled packages.
+```
+
+even though the version **does** exist. It is a stale cached packument for packages published
+since your last install. Confirm and clear:
+
+```bash
+npm view pi-docparser versions   # if the version is listed, the registry is fine — cache was stale
+```
+
+Running `npm view` on the pinned packages refreshes the cache; so does `npm cache clean --force`.
+This is not caused by the merge — it reproduces on a pristine upstream checkout.
+
+### 4. `.nvmrc` moves between syncs
+
+See [Node gotcha](#node-gotcha). `20.19.0` → `24.18.0` across the 2026-04 → 2026-08 window.
 
 ---
 
-### Fork divergence manifest and sync process
+## Verification Checklist
 
-- **Issue**: #2
-- **Status**: active
-- **Based on upstream**: v0.2.17
-- **Files touched**:
-  - `FORK.md` (new — fork-owned)
-- **Purpose**: Documents fork customisations and provides a runbook for syncing with upstream without losing fork-specific changes.
-- **Merge risk**: **LOW** (new fork-owned file, upstream will never have it)
-- **Conflict notes**: None expected.
+A sync is done only when all of these pass.
+
+```bash
+node -v                       # 1. matches .nvmrc exactly
+npm ci                        # 2. clean; leaves package-lock.json unmodified
+npm run typecheck             # 3. THE gate on parallel.ts — build alone won't catch it
+npm test                      # 4. full suite, incl. 13 parallel-search tests
+npm run build                 # 5. clean
+feynman --version             # 6. reports the new version, not the old one
+feynman doctor                # 7. "pi runtime: ok"
+git diff --name-status upstream/main HEAD   # 8. only the 5 fork files + FORK.md
+```
+
+Then two runtime checks that no unit test covers:
+
+```bash
+# 9. parallel-cli reachable and returning results
+parallel-cli search "test query" --json --max-results 2
+
+# 10. all four Feynman agents still win over pi-subagents' colliding builtins
+PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT="$PWD/node_modules/@earendil-works/pi-coding-agent" \
+node --import tsx -e "
+const m = await import('./.feynman/npm/node_modules/pi-subagents/src/agents/agents.ts');
+const r = m.discoverAgentsAll(process.cwd());
+console.log('project agents:', r.project.map(a => a.name).join(', '));
+"
+# expect: researcher, reviewer, verifier, writer
+```
+
+`scripts/fork/check-fork-delta.sh` automates checks 1, 3 and 8.
+
+---
+
+## Retired Customisations
+
+Kept for history. **Do not re-apply these.**
+
+### Agent prompt overrides — retired 2026-08-06
+
+The fork used to rewrite the "Search strategy" prose in `researcher.md`, the `fetch_content` →
+`parallel_fetch` guidance in `verifier.md`, and the search instructions in `.feynman/SYSTEM.md`,
+so the agents were *told* to prefer the parallel tools.
+
+**Why retired:** upstream rewrites this prose constantly. Carrying it meant a hand-merge of
+upstream's prompt work on every sync, and it had already silently dropped upstream's newer
+`hf_*` tool guidance. Registering the tools and adding them to the frontmatter allowlist is
+enough for the agents to use them, at a fraction of the merge cost.
+
+### `npm:pi-subagents` removal — retired 2026-08-06
+
+The fork removed `npm:pi-subagents` from `.feynman/settings.json` because that package's own
+`researcher.md`/`reviewer.md` appeared to hide Feynman's `verifier`/`reviewer`/`writer` agents.
+
+**Why retired:** upstream fixed it. Between v0.2.17 and v0.3.11 they shipped pi-subagents 0.40.0
+plus "Patch Pi's user-scope package root so subagent fixes actually load" and "Repair
+half-patched pi-subagents agents.ts". Verified on 2026-08-06: project-scope agents take
+precedence over pi-subagents' builtins, and all four Feynman agents resolve to
+`.feynman/agents/*.md`. Upstream's delegated-research architecture now depends on pi-subagents,
+and `src/pi/package-presets.ts` re-adds it automatically — so the removal both breaks features
+and does not stick.
