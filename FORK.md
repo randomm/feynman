@@ -33,6 +33,25 @@ An earlier version of this fork overrode that prose, which meant every sync had 
 upstream's prompt improvements, and it silently dropped new upstream tools. That is retired —
 see [Retired Customisations](#retired-customisations).
 
+### Deliberate non-change: `pi-web-access` stays
+
+All web access is meant to go through parallel.ai, so it is tempting to strip `pi-web-access`.
+**Don't.** Decided 2026-08-06:
+
+- It is already inert here. `feynman doctor` shows exa / perplexity / gemini all *"not
+  configured"*, so `web_search` has no backend and cannot make calls. Traffic already goes to
+  parallel.ai with zero fork delta.
+- Removing it from `.feynman/settings.json` does not stick — `src/pi/package-presets.ts`
+  reconciles that list automatically (the same trap that killed the `pi-subagents` removal).
+- Upstream *patches* the package (`scripts/lib/pi-web-access-patch.mjs`) and asserts its cache
+  wiring (`scripts/verify-package-artifact.mjs`), so removal likely breaks upstream's own checks.
+- Upstream prose in `SYSTEM.md` and two agents instructs agents to call `web_search` /
+  `fetch_content`; removing the package would require re-introducing the retired prompt overrides.
+
+If a search API key is ever configured here, revisit. The cheap lever then is dropping those
+tool names from the two frontmatter allowlists this fork already owns — **not** touching
+`settings.json`.
+
 ---
 
 ## Prerequisites
