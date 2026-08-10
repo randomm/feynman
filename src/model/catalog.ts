@@ -12,6 +12,21 @@ type ModelRecord = {
 
 const PRO_CLASS_MODEL_PATTERN = /(?:^|[-_.:/])pro(?:$|[-_.:/])/i;
 
+// FORK-OWNED (see FORK.md). The Pro-class guard matches the literal word "pro",
+// which false-positives on open-weight models merely *named* "Pro". Specs listed
+// here — or in FEYNMAN_ALLOW_PRO_MODELS (comma-separated) — bypass the guard.
+// Entries are lowercase and match either the full spec or its trailing
+// "<vendor>/<model>" part, so they hold across providers.
+const PRO_CLASS_ALLOWLIST_DEFAULT = ["deepseek-ai/deepseek-v4-pro"];
+
+function proClassAllowlist(): string[] {
+	const configured = (process.env.FEYNMAN_ALLOW_PRO_MODELS ?? "")
+		.split(",")
+		.map((entry) => entry.trim().toLowerCase())
+		.filter((entry) => entry.length > 0);
+	return [...PRO_CLASS_ALLOWLIST_DEFAULT, ...configured];
+}
+
 export type ProviderStatus = {
 	id: string;
 	label: string;
@@ -193,7 +208,12 @@ function researchPreferenceReason(model: ModelRecord): string | undefined {
 
 export function isProClassModelSpec(spec: string | undefined): boolean {
 	const normalized = spec?.trim().replace(/^([^/:]+):(.+)$/, "$1/$2");
-	return normalized ? PRO_CLASS_MODEL_PATTERN.test(normalized) : false;
+	if (!normalized) return false;
+	const lowered = normalized.toLowerCase();
+	if (proClassAllowlist().some((entry) => lowered === entry || lowered.endsWith(`/${entry}`))) {
+		return false;
+	}
+	return PRO_CLASS_MODEL_PATTERN.test(normalized);
 }
 
 function isProClassModel(model: ModelRecord): boolean {

@@ -20,7 +20,10 @@ EXPECTED='FORK.md
 extensions/parallel-search/parallel.ts
 extensions/research-tools.ts
 scripts/fork/check-fork-delta.sh
+scripts/fork/gen-models-json.mjs
+src/model/catalog.ts
 tests/parallel-search.test.ts
+tests/pro-class-allowlist.test.ts
 .feynman/agents/researcher.md
 .feynman/agents/verifier.md'
 
@@ -68,7 +71,17 @@ else
 	bad "no upstream/main ref -> git remote add upstream https://github.com/companion-inc/feynman.git && git fetch upstream"
 fi
 
-note '--- 4. parallel-cli present ---'
+note '--- 4. Pro-class allowlist patch survived ---'
+# A merge that takes upstream's src/model/catalog.ts wholesale silently removes
+# this, and DeepSeek-V4-Pro vanishes from `feynman model list` again.
+if grep -q 'PRO_CLASS_ALLOWLIST_DEFAULT' src/model/catalog.ts 2>/dev/null &&
+   grep -q 'proClassAllowlist()' src/model/catalog.ts 2>/dev/null; then
+	ok "src/model/catalog.ts still carries the allowlist patch"
+else
+	bad "src/model/catalog.ts LOST the Pro-class allowlist patch -> re-apply it (see FORK.md); tests/pro-class-allowlist.test.ts will also be failing"
+fi
+
+note '--- 5. parallel-cli present ---'
 if command -v parallel-cli >/dev/null 2>&1; then
 	ok "parallel-cli at $(command -v parallel-cli)"
 else

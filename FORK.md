@@ -92,24 +92,53 @@ Verify with `which feynman` and `feynman --version`.
 
 ## The Fork Delta
 
-Exactly **five** files differ from upstream. Verify with:
+Exactly **seven** files differ from upstream. Verify with:
 
 ```bash
-git diff --name-status upstream/main HEAD    # should list only these + FORK.md
+sh scripts/fork/check-fork-delta.sh          # automated
+git diff --name-status upstream/main HEAD    # or by hand
 ```
 
 | File | Risk | Change |
 |---|---|---|
 | `extensions/parallel-search/parallel.ts` | **LOW** | **New, fork-owned.** Exports `registerParallelTools(pi)`, registering `parallel_search`, `parallel_fetch`, `parallel_research`. Shells out to `parallel-cli` via `execFile` (no shell → no injection), always `--json`, 5-min timeout, 50 MB stdout cap. |
 | `tests/parallel-search.test.ts` | **LOW** | **New, fork-owned.** 13 unit tests over a mock `pi`. Runs as part of `npm test`. |
+| `tests/pro-class-allowlist.test.ts` | **LOW** | **New, fork-owned.** 6 tests guarding the `src/model/catalog.ts` patch below. This is the tripwire — see that row. |
+| `scripts/fork/check-fork-delta.sh` | **LOW** | **New, fork-owned.** Post-sync verification. |
 | `extensions/research-tools.ts` | **MEDIUM** | **Two lines**: the `registerParallelTools` import and its call. Upstream adds registrations here often — it has merged cleanly so far because our lines sit in a stable alphabetical slot. |
 | `.feynman/agents/researcher.md` | **MEDIUM** | **Frontmatter `tools:` only.** Appends `parallel_search, parallel_fetch, parallel_research` to upstream's list. |
 | `.feynman/agents/verifier.md` | **MEDIUM** | **Frontmatter `tools:` only.** Appends `parallel_fetch` to upstream's list. |
+| `src/model/catalog.ts` | **HIGH** | **Pro-class allowlist** — one constant + one helper + a 4-line guard inside `isProClassModelSpec`. See below. |
 | `FORK.md` | **LOW** | This file. Upstream has no counterpart. |
 
 Nothing else. In particular the fork does **not** touch `package.json`, `package-lock.json`,
-`.feynman/settings.json`, `.feynman/SYSTEM.md`, `src/`, or `scripts/`. If a sync leaves a diff in
-any of those, it is accidental — revert it to upstream.
+`.feynman/settings.json`, `.feynman/SYSTEM.md`, or `outputs/`. If a sync leaves a diff in any of
+those, it is accidental — revert it to upstream.
+
+### The `src/model/catalog.ts` patch (the one risky edit)
+
+Upstream disables "Pro-class" models as a cost guard:
+
+```js
+const PRO_CLASS_MODEL_PATTERN = /(?:^|[-_.:/])pro(?:$|[-_.:/])/i;
+```
+
+It matches the literal word "pro", which false-positives on open-weight models merely *named*
+"Pro". `deepseek-ai/DeepSeek-V4-Pro` costs $1.75/$3.50 per Mtok on Nebius — cheaper than
+`moonshotai/Kimi-K3` ($3/$15), which the guard allows. The guard is enforced in **8 places**
+(`src/cli.ts` ×6, `src/pi/settings.ts`, `src/model/catalog.ts`) with **no env var or flag
+override**, so config alone cannot bypass it, and Pi has no display-id/wire-id split to alias
+around it.
+
+The fork narrows the guard with an allowlist, defaulting to DeepSeek-V4-Pro and extensible at
+runtime via `FEYNMAN_ALLOW_PRO_MODELS` (comma-separated) — so **adding future models needs no
+further code change**.
+
+**Why this is safe to carry:** `tests/pro-class-allowlist.test.ts` fails loudly if the patch is
+lost, and `scripts/fork/check-fork-delta.sh` greps for it explicitly. A sync that resolves this
+file by taking upstream wholesale cannot fail silently. To re-apply after a bad merge: re-add
+`PRO_CLASS_ALLOWLIST_DEFAULT` + `proClassAllowlist()` near the pattern, and the early-return
+inside `isProClassModelSpec`. Keep upstream's regex untouched.
 
 ---
 
@@ -167,13 +196,40 @@ Rollback at any point: `git reset --hard pre-sync-<version>`.
 | `.feynman/agents/researcher.md` | Take upstream whole, then append `, parallel_search, parallel_fetch, parallel_research` to the **frontmatter `tools:` line only**. Leave all prose alone. |
 | `.feynman/agents/verifier.md` | Take upstream whole, then append `, parallel_fetch` to the **frontmatter `tools:` line only**. Leave all prose alone. |
 | `extensions/research-tools.ts` | Keep upstream's full import + registration lists, then re-insert our two lines. |
-| `extensions/parallel-search/parallel.ts`, `tests/parallel-search.test.ts` | Ours — upstream has no counterpart, so these never conflict. But they **do** silently break on runtime renames; see Hazards. |
+| `src/model/catalog.ts` | Take upstream whole, then re-apply the Pro-class allowlist (see [the patch](#the-srcmodelcatalogts-patch-the-one-risky-edit)). `npm test` and the check script both fail until you do. |
+| `extensions/parallel-search/parallel.ts`, `tests/parallel-search.test.ts`, `tests/pro-class-allowlist.test.ts`, `scripts/fork/check-fork-delta.sh` | Ours — upstream has no counterpart, so these never conflict. But `parallel.ts` **does** silently break on runtime renames; see Hazards. |
 
 Never resolve an agent file by keeping "ours". Upstream adds tools to those allowlists
 (it added `write`, `edit`, and three `hf_*` tools in the 0.2.17 → 0.3.11 window); keeping our
 side wholesale would delete them and quietly reduce the agent's capability.
 
 ---
+
+## Custom Model Providers (Nebius + Trail Openers)
+
+This lives in `~/.feynman/agent/models.json`, **outside the repo** — so it is not part of the
+fork delta, but it *is* wiped along with the rest of `~/.feynman/` on a bad day. Regenerate with:
+
+```bash
+node scripts/fork/gen-models-json.mjs
+feynman model list          # expect 13 nebius/* + 1 trailopeners-h100/*
+```
+
+The script is idempotent, backs up any existing file, and writes keys as `$NEBIUS_API_KEY` /
+`$TRAIL_OPENERS_LLM_KEY` **references** — no secret is ever written to disk. It needs
+`node_modules/` installed (it reads Pi's model catalogue from there).
+
+Two things worth knowing:
+
+- **Nebius has two endpoints.** `api.tokenfactory.nebius.com` (global) serves 28 models;
+  `api.tokenfactory.eu-west2.nebius.com` serves exactly one (`Kimi-K3`), because that model is
+  hosted in `eu-west2`. The generator uses the global endpoint. Model names embed the region
+  (e.g. *"GLM-5.1 (Nebius eu-north1)"*) so data residency is visible in the picker — most of the
+  roster is `eu-north1`, with some in `uk-south1` and `us-central1`.
+- **Nebius's API exposes no metadata** — `/v1/models` returns ids only, and there is no
+  per-model detail endpoint. Pricing and context come from
+  `tokenfactory.nebius.com/api/public/models_info` (an undocumented endpoint referenced by their
+  pricing page). If that ever disappears, the generator fails loudly rather than writing zeros.
 
 ## Hazards
 
