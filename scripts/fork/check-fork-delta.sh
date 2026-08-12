@@ -19,10 +19,12 @@ ok()   { printf 'ok    %s\n' "$*"; }
 EXPECTED='FORK.md
 extensions/parallel-search/parallel.ts
 extensions/research-tools.ts
+extensions/fork/current-date.ts
 scripts/fork/check-fork-delta.sh
 scripts/fork/gen-models-json.mjs
 src/model/catalog.ts
 tests/parallel-search.test.ts
+tests/current-date-context.test.ts
 tests/pro-class-allowlist.test.ts
 .feynman/agents/researcher.md
 .feynman/agents/verifier.md'

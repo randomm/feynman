@@ -104,6 +104,8 @@ git diff --name-status upstream/main HEAD    # or by hand
 | `extensions/parallel-search/parallel.ts` | **LOW** | **New, fork-owned.** Exports `registerParallelTools(pi)`, registering `parallel_search`, `parallel_fetch`, `parallel_research`. Shells out to `parallel-cli` via `execFile` (no shell → no injection), always `--json`, 5-min timeout, 50 MB stdout cap. |
 | `tests/parallel-search.test.ts` | **LOW** | **New, fork-owned.** 13 unit tests over a mock `pi`. Runs as part of `npm test`. |
 | `tests/pro-class-allowlist.test.ts` | **LOW** | **New, fork-owned.** 6 tests guarding the `src/model/catalog.ts` patch below. This is the tripwire — see that row. |
+| `extensions/fork/current-date.ts` | **LOW** | **New, fork-owned.** Injects the real current date into every request. See below. |
+| `tests/current-date-context.test.ts` | **LOW** | **New, fork-owned.** 5 tests for the date injection. |
 | `scripts/fork/check-fork-delta.sh` | **LOW** | **New, fork-owned.** Post-sync verification. |
 | `extensions/research-tools.ts` | **MEDIUM** | **Two lines**: the `registerParallelTools` import and its call. Upstream adds registrations here often — it has merged cleanly so far because our lines sit in a stable alphabetical slot. |
 | `.feynman/agents/researcher.md` | **MEDIUM** | Frontmatter only: appends `parallel_search, parallel_fetch, parallel_research` to upstream's `tools:`, **plus a `subagentOnlyExtensions:` line** (see below). |
@@ -114,6 +116,28 @@ git diff --name-status upstream/main HEAD    # or by hand
 Nothing else. In particular the fork does **not** touch `package.json`, `package-lock.json`,
 `.feynman/settings.json`, `.feynman/SYSTEM.md`, or `outputs/`. If a sync leaves a diff in any of
 those, it is accidental — revert it to upstream.
+
+### Current-date injection — research correctness, not cosmetics
+
+**Neither Pi nor Feynman puts the current date in the prompt.** Verified by capturing a real
+provider request: 38,311 characters of system prompt, zero references to any date. Yet that same
+prompt tells the agent to research *"latest/current/recent"* topics.
+
+With no anchor, the model assumes its training cutoff is "now". An observed research run
+**silently discarded every source published after 2025** as implausible. This is a correctness
+bug, not a cosmetic one: it corrupts recency judgements and citation selection without any error.
+
+`extensions/fork/current-date.ts` registers a handler on Pi's `context` event — which shapes the
+per-request context only and does **not** mutate persisted session state — appending a block that
+states the real date and tells the model not to reject post-cutoff material. Old blocks are
+stripped before a fresh one is added, so a long-running session can neither accumulate duplicates
+nor carry a stale date.
+
+It is wired in `extensions/research-tools.ts`, the same file the agents load via
+`subagentOnlyExtensions`, so **subagents get the date too** — important, because the researcher
+subagent is what actually judges source recency.
+
+If upstream ever adds its own date/environment block, drop this to avoid two competing blocks.
 
 ### `subagentOnlyExtensions` — required, or every delegation fails
 
