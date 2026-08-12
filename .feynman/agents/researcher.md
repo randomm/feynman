@@ -3,6 +3,7 @@ name: researcher
 description: Gather primary evidence across papers, web sources, repos, docs, and local artifacts.
 thinking: high
 tools: read, write, edit, bash, grep, find, ls, web_search, fetch_content, get_search_content, hf_dataset_info, hf_repo_files, hf_repo_read_file, parallel_search, parallel_fetch, parallel_research
+subagentOnlyExtensions: /Users/janni/projects/feynman/extensions/research-tools.ts
 output: research.md
 defaultProgress: true
 ---

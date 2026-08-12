@@ -81,7 +81,29 @@ else
 	bad "src/model/catalog.ts LOST the Pro-class allowlist patch -> re-apply it (see FORK.md); tests/pro-class-allowlist.test.ts will also be failing"
 fi
 
-note '--- 5. parallel-cli present ---'
+note '--- 5. subagent extension path is correct ---'
+# Child subagents do not inherit Feynman's local extensions, so researcher/verifier
+# declare subagentOnlyExtensions with an ABSOLUTE path. If the repo is ever moved or
+# cloned elsewhere, that path silently stops resolving and every research delegation
+# fails with "requested unavailable child tools".
+want_ext="$(pwd)/extensions/research-tools.ts"
+sub_ok=1
+for agent in .feynman/agents/researcher.md .feynman/agents/verifier.md; do
+	got=$(grep -m1 '^subagentOnlyExtensions:' "$agent" 2>/dev/null | sed 's/^subagentOnlyExtensions:[[:space:]]*//')
+	if [ -z "$got" ]; then
+		bad "$agent has no subagentOnlyExtensions -> subagent tool calls will fail"
+		sub_ok=0
+	elif [ "$got" != "$want_ext" ]; then
+		bad "$agent points at '$got' but this repo is at '$want_ext' -> update it"
+		sub_ok=0
+	elif [ ! -f "$got" ]; then
+		bad "$agent points at '$got' which does not exist"
+		sub_ok=0
+	fi
+done
+[ "$sub_ok" -eq 1 ] && ok "researcher + verifier load extensions/research-tools.ts in child sessions"
+
+note '--- 6. parallel-cli present ---'
 if command -v parallel-cli >/dev/null 2>&1; then
 	ok "parallel-cli at $(command -v parallel-cli)"
 else

@@ -106,14 +106,51 @@ git diff --name-status upstream/main HEAD    # or by hand
 | `tests/pro-class-allowlist.test.ts` | **LOW** | **New, fork-owned.** 6 tests guarding the `src/model/catalog.ts` patch below. This is the tripwire — see that row. |
 | `scripts/fork/check-fork-delta.sh` | **LOW** | **New, fork-owned.** Post-sync verification. |
 | `extensions/research-tools.ts` | **MEDIUM** | **Two lines**: the `registerParallelTools` import and its call. Upstream adds registrations here often — it has merged cleanly so far because our lines sit in a stable alphabetical slot. |
-| `.feynman/agents/researcher.md` | **MEDIUM** | **Frontmatter `tools:` only.** Appends `parallel_search, parallel_fetch, parallel_research` to upstream's list. |
-| `.feynman/agents/verifier.md` | **MEDIUM** | **Frontmatter `tools:` only.** Appends `parallel_fetch` to upstream's list. |
+| `.feynman/agents/researcher.md` | **MEDIUM** | Frontmatter only: appends `parallel_search, parallel_fetch, parallel_research` to upstream's `tools:`, **plus a `subagentOnlyExtensions:` line** (see below). |
+| `.feynman/agents/verifier.md` | **MEDIUM** | Frontmatter only: appends `parallel_fetch` to upstream's `tools:`, **plus `subagentOnlyExtensions:`** (see below). |
 | `src/model/catalog.ts` | **HIGH** | **Pro-class allowlist** — one constant + one helper + a 4-line guard inside `isProClassModelSpec`. See below. |
 | `FORK.md` | **LOW** | This file. Upstream has no counterpart. |
 
 Nothing else. In particular the fork does **not** touch `package.json`, `package-lock.json`,
 `.feynman/settings.json`, `.feynman/SYSTEM.md`, or `outputs/`. If a sync leaves a diff in any of
 those, it is accidental — revert it to upstream.
+
+### `subagentOnlyExtensions` — required, or every delegation fails
+
+Child subagents **do not inherit Feynman's local `./extensions`**. `pi-subagents` launches them
+with only its runtime extension plus whatever npm packages `settings.json` lists — a run's
+`launchResolvedExtensions.configured` is `[]` without this fix. The frontmatter `tools:` field is
+a *strict allowlist that does not load extension code*, so naming an extension tool there without
+loading its provider is a hard failure:
+
+```
+Error: Agent 'researcher' requested unavailable child tools:
+hf_dataset_info, hf_repo_files, hf_repo_read_file, parallel_search, parallel_fetch, parallel_research
+```
+
+Both agents therefore carry:
+
+```
+subagentOnlyExtensions: /Users/janni/projects/feynman/extensions/research-tools.ts
+```
+
+That single file registers **both** upstream's `hf_*` tools and this fork's `parallel_*` tools.
+
+Two things to know:
+
+- **This is upstream's bug too.** Upstream's `researcher.md` declares `hf_dataset_info`,
+  `hf_repo_files` and `hf_repo_read_file` with no `subagentOnlyExtensions`, so upstream research
+  delegations fail on those names as well. Our `parallel_*` entries merely lengthen the list. If
+  upstream ever wires its own extensions into children, this line may become redundant — check at
+  sync time before carrying it forward blindly.
+- **The path is absolute**, because the child's cwd is the project being worked in, not this repo.
+  Move or re-clone the repo and every delegation breaks. `scripts/fork/check-fork-delta.sh`
+  check 5 asserts the path matches the current repo root and exists, so this fails loudly
+  rather than at the next research run.
+
+Package-provided tools are unaffected: `web_search` / `fetch_content` come from the
+`pi-web-access` **package**, which children do load. That asymmetry is why a delegation can look
+half-working — one agent succeeds on `fetch_content` while its siblings die on `parallel_search`.
 
 ### The `src/model/catalog.ts` patch (the one risky edit)
 
@@ -193,8 +230,8 @@ Rollback at any point: `git reset --hard pre-sync-<version>`.
 | `.feynman/SYSTEM.md` | `git checkout --theirs` — **take upstream whole, no exceptions.** |
 | `.feynman/settings.json` | `git checkout --theirs` — **take upstream whole.** Upstream pins package versions here and `src/pi/package-presets.ts` auto-reconciles it; any edit is fought by the reconciler. |
 | `package.json`, `package-lock.json` | `git checkout --theirs` — the fork owns nothing here. |
-| `.feynman/agents/researcher.md` | Take upstream whole, then append `, parallel_search, parallel_fetch, parallel_research` to the **frontmatter `tools:` line only**. Leave all prose alone. |
-| `.feynman/agents/verifier.md` | Take upstream whole, then append `, parallel_fetch` to the **frontmatter `tools:` line only**. Leave all prose alone. |
+| `.feynman/agents/researcher.md` | Take upstream whole, then append `, parallel_search, parallel_fetch, parallel_research` to the **frontmatter `tools:` line** and re-add the `subagentOnlyExtensions:` line. Leave all prose alone. |
+| `.feynman/agents/verifier.md` | Take upstream whole, then append `, parallel_fetch` to the **frontmatter `tools:` line** and re-add the `subagentOnlyExtensions:` line. Leave all prose alone. |
 | `extensions/research-tools.ts` | Keep upstream's full import + registration lists, then re-insert our two lines. |
 | `src/model/catalog.ts` | Take upstream whole, then re-apply the Pro-class allowlist (see [the patch](#the-srcmodelcatalogts-patch-the-one-risky-edit)). `npm test` and the check script both fail until you do. |
 | `extensions/parallel-search/parallel.ts`, `tests/parallel-search.test.ts`, `tests/pro-class-allowlist.test.ts`, `scripts/fork/check-fork-delta.sh` | Ours — upstream has no counterpart, so these never conflict. But `parallel.ts` **does** silently break on runtime renames; see Hazards. |
