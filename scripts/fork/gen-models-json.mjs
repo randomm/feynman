@@ -42,6 +42,19 @@ const PROBED_CONTEXT = {
 	"meta-llama/Llama-3.3-70B-Instruct": 131072,
 };
 
+// Feynman sends ~25k tokens of fixed overhead per request (~9.6k system prompt +
+// ~15.4k of tool definitions, measured on the wire). A model needs materially more
+// context than that to be useful, so anything below this is dropped with a reason.
+const MIN_CONTEXT_WINDOW = 100_000;
+
+// Nebius's reasoning parser does not handle these: they emit raw <think> blocks
+// into message.content instead of reasoning_content, which wastes output tokens and
+// pollutes answers. Verified by direct API probe.
+const BROKEN_REASONING_PARSE = new Set(["Qwen/Qwen3-32B"]);
+
+// Pi's huggingface.json entry is wrong for these; verified against the live endpoint.
+const REASONING_OVERRIDE = { "Qwen/Qwen3-Next-80B-A3B-Thinking": true };
+
 // Nebius ids for which Pi ships an exact-id catalogue entry (so compat is authoritative).
 const NEBIUS_MODELS = [
 	"deepseek-ai/DeepSeek-V4-Pro",
@@ -77,8 +90,18 @@ const hf = flattenCatalogue(JSON.parse(readFileSync(HF_CATALOGUE, "utf8")));
 
 const infoRaw = await fetchJson(NEBIUS_INFO_URL);
 const infoArr = Array.isArray(infoRaw) ? infoRaw : infoRaw.data || infoRaw.models || Object.values(infoRaw)[0];
+// A model can list several flavors, including fine-tuning ones that report a
+// placeholder max_model_len of 8000. Keep the flavor with the largest context so a
+// fine-tune entry never masks the real inference limit.
 const nebiusInfo = {};
-for (const model of infoArr) for (const flavor of model.flavors || []) nebiusInfo[flavor.model_id] = flavor;
+for (const model of infoArr) {
+	for (const flavor of model.flavors || []) {
+		const existing = nebiusInfo[flavor.model_id];
+		if (!existing || (flavor.max_model_len ?? 0) > (existing.max_model_len ?? 0)) {
+			nebiusInfo[flavor.model_id] = flavor;
+		}
+	}
+}
 
 const nebiusModels = [];
 for (const id of NEBIUS_MODELS) {
@@ -87,11 +110,28 @@ for (const id of NEBIUS_MODELS) {
 	if (!base) { console.error(`skip ${id}: no Pi catalogue entry (upstream changed?)`); continue; }
 	if (!nb) { console.error(`skip ${id}: Nebius no longer serves it`); continue; }
 
-	const contextWindow = PROBED_CONTEXT[id] ?? nb.max_model_len ?? base.contextWindow;
+	// models_info reports a placeholder max_model_len of 8000 for several models whose
+	// endpoint actually serves far more (Kimi-K2.6: 8000 reported, 262144 real). Take the
+	// larger of max_model_len and context_window_k*1000 — the latter never over-states,
+	// so a wrong guess errs toward a smaller, safe context rather than failing requests.
+	const contextWindow =
+		PROBED_CONTEXT[id] ??
+		Math.max(nb.max_model_len ?? 0, (nb.context_window_k ?? 0) * 1000) ??
+		base.contextWindow;
+	if (contextWindow < MIN_CONTEXT_WINDOW) {
+		console.error(`skip ${id}: context ${contextWindow} < ${MIN_CONTEXT_WINDOW}; Feynman's ~25k-token prompt leaves too little room`);
+		continue;
+	}
+	if (BROKEN_REASONING_PARSE.has(id)) {
+		console.error(`skip ${id}: Nebius emits raw <think> into content instead of reasoning_content`);
+		continue;
+	}
+
+	const tps = nb.tokens_per_second ? `, ${Math.round(nb.tokens_per_second)} tok/s` : "";
 	const entry = {
 		id,
-		name: `${nb.model_name || id.split("/").pop()} (Nebius ${nb.regions?.[0]?.name ?? "?"})`,
-		reasoning: base.reasoning ?? false,
+		name: `${nb.model_name || id.split("/").pop()} (Nebius ${nb.regions?.[0]?.name ?? "?"}${tps})`,
+		reasoning: REASONING_OVERRIDE[id] ?? base.reasoning ?? false,
 		input: base.input ?? ["text"],
 		cost: {
 			input: nb.input_price_per_million_tokens ?? 0,
