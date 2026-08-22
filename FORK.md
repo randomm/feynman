@@ -287,6 +287,15 @@ Two things worth knowing:
   hosted in `eu-west2`. The generator uses the global endpoint. Model names embed the region
   (e.g. *"GLM-5.1 (Nebius eu-north1)"*) so data residency is visible in the picker — most of the
   roster is `eu-north1`, with some in `uk-south1` and `us-central1`.
+- **Trail Openers models come from the live server, with thinking OFF.** The model list and
+  context window are read from `/v1/models` (vLLM reports `max_model_len`), so a box migration —
+  e.g. Qwen3.6 → Qwen3.8 — is picked up by re-running the generator; no code edit needed. Entries
+  are written with `reasoning: false`, matching the hand-maintained Pi config at
+  `~/.pi/agent/models.json`. That parity is also a correctness requirement: the endpoint
+  **rejects `reasoning_effort: "high"`** (*"Supported types are xhigh (default), medium, and
+  low"*) and Feynman's researcher agent runs at `thinking: high`, so enabling reasoning here
+  would fail every research delegation. With `reasoning: false` Pi never sends the parameter —
+  verified by a delegation that ran as `…Qwen3.8-27B-FP8:high` and exited 0.
 - **Nebius's API exposes no metadata** — `/v1/models` returns ids only, and there is no
   per-model detail endpoint. Pricing and context come from
   `tokenfactory.nebius.com/api/public/models_info` (an undocumented endpoint referenced by their

@@ -151,6 +151,12 @@ for (const id of NEBIUS_MODELS) {
 
 // Trail Openers runs vLLM, which reports max_model_len over /v1/models - so the
 // live server is the source of truth for both the model list and its context.
+//
+// Thinking is deliberately OFF (reasoning: false), matching the hand-maintained Pi
+// config at ~/.pi/agent/models.json. Beyond parity, the endpoint rejects
+// reasoning_effort "high" ("Supported types are xhigh (default), medium, and low"),
+// and Feynman's researcher agent runs at `thinking: high` - so enabling reasoning
+// here would fail every research delegation. low/medium/xhigh are accepted.
 const toKey = process.env.TRAIL_OPENERS_LLM_KEY;
 const toModels = [];
 try {
@@ -160,14 +166,13 @@ try {
 		toModels.push({
 			id: m.id,
 			name: `${m.id.split("/").pop()} (Trail Openers H100)`,
-			reasoning: true,
+			reasoning: false,
 			input: ["text", "image"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow,
 			maxTokens: Math.min(32768, contextWindow),
 			compat: {
-				thinkingFormat: "qwen-chat-template",
-				supportsReasoningEffort: false,
+				supportsReasoningEffort: true,
 				supportsDeveloperRole: false,
 				maxTokensField: "max_tokens",
 			},
