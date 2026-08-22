@@ -153,10 +153,18 @@ for (const id of NEBIUS_MODELS) {
 // live server is the source of truth for both the model list and its context.
 //
 // Thinking is deliberately OFF (reasoning: false), matching the hand-maintained Pi
-// config at ~/.pi/agent/models.json. Beyond parity, the endpoint rejects
-// reasoning_effort "high" ("Supported types are xhigh (default), medium, and low"),
-// and Feynman's researcher agent runs at `thinking: high` - so enabling reasoning
-// here would fail every research delegation. low/medium/xhigh are accepted.
+// config at ~/.pi/agent/models.json.
+//
+// Note the served model has a bug: it rejects reasoning_effort "high" while accepting
+// low/medium/xhigh ("Supported types are xhigh (default), medium, and low"). Since
+// Feynman's researcher agent runs at `thinking: high`, enabling reasoning without a
+// workaround would fail every research delegation against this box. With
+// reasoning: false Pi never sends the parameter, so the bug cannot bite.
+//
+// This is a model-side defect, not an endpoint policy - a future model may accept
+// "high" and need no special handling. If thinking is ever wanted here before that,
+// do NOT flip reasoning alone: add thinkingLevelMap: { high: "xhigh" } to remap the
+// one broken level (Pi's ThinkingLevelMap maps pi levels -> provider values).
 const toKey = process.env.TRAIL_OPENERS_LLM_KEY;
 const toModels = [];
 try {

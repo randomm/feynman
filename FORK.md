@@ -291,11 +291,19 @@ Two things worth knowing:
   context window are read from `/v1/models` (vLLM reports `max_model_len`), so a box migration —
   e.g. Qwen3.6 → Qwen3.8 — is picked up by re-running the generator; no code edit needed. Entries
   are written with `reasoning: false`, matching the hand-maintained Pi config at
-  `~/.pi/agent/models.json`. That parity is also a correctness requirement: the endpoint
-  **rejects `reasoning_effort: "high"`** (*"Supported types are xhigh (default), medium, and
-  low"*) and Feynman's researcher agent runs at `thinking: high`, so enabling reasoning here
-  would fail every research delegation. With `reasoning: false` Pi never sends the parameter —
-  verified by a delegation that ran as `…Qwen3.8-27B-FP8:high` and exited 0.
+  `~/.pi/agent/models.json`. That parity is also a correctness requirement, because of a
+  **bug in the served model**: it rejects `reasoning_effort: "high"` while accepting
+  `low` / `medium` / `xhigh` (*"Supported types are xhigh (default), medium, and low"*).
+  Feynman's researcher agent runs at `thinking: high`, so enabling reasoning without a
+  workaround would fail every research delegation against this box. With `reasoning: false`
+  Pi never sends the parameter — verified by a delegation that ran as
+  `…Qwen3.8-27B-FP8:high` and exited 0.
+
+  This is a **model-side defect, not an endpoint policy**, so re-check it after each box
+  migration — a future model may accept `high` and need no special handling. If thinking is
+  ever wanted here before then, do *not* flip `reasoning` on its own: add
+  `thinkingLevelMap: { high: "xhigh" }` to remap the single broken level (Pi's
+  `ThinkingLevelMap` maps pi thinking levels to provider values).
 - **Nebius's API exposes no metadata** — `/v1/models` returns ids only, and there is no
   per-model detail endpoint. Pricing and context come from
   `tokenfactory.nebius.com/api/public/models_info` (an undocumented endpoint referenced by their
