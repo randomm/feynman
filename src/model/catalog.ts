@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
-
 import { getEnvApiKey } from "@earendil-works/pi-ai/compat";
 
+import { readJsonFile } from "../config/json-file.js";
 import { createModelRuntime } from "./registry.js";
 
 type ModelRecord = {
@@ -12,20 +11,15 @@ type ModelRecord = {
 
 const PRO_CLASS_MODEL_PATTERN = /(?:^|[-_.:/])pro(?:$|[-_.:/])/i;
 
-// FORK-OWNED (see FORK.md). The Pro-class guard matches the literal word "pro",
-// which false-positives on open-weight models merely *named* "Pro". Specs listed
-// here — or in FEYNMAN_ALLOW_PRO_MODELS (comma-separated) — bypass the guard.
-// Entries are lowercase and match either the full spec or its trailing
-// "<vendor>/<model>" part, so they hold across providers.
-const PRO_CLASS_ALLOWLIST_DEFAULT = ["deepseek-ai/deepseek-v4-pro"];
-
-function proClassAllowlist(): string[] {
-	const configured = (process.env.FEYNMAN_ALLOW_PRO_MODELS ?? "")
-		.split(",")
-		.map((entry) => entry.trim().toLowerCase())
-		.filter((entry) => entry.length > 0);
-	return [...PRO_CLASS_ALLOWLIST_DEFAULT, ...configured];
-}
+// Pi catalogs these exact DeepSeek V4 Pro model IDs as ordinary open-weight
+// models, not premium service tiers. Keep this exception list exact: a broad
+// "Pro" bypass would also admit Gemini Pro, o1-pro, and future premium models.
+const NON_PREMIUM_PRO_MODEL_IDS = new Set([
+	"accounts/fireworks/models/deepseek-v4-pro",
+	"deepseek-ai/deepseek-v4-pro",
+	"deepseek/deepseek-v4-pro",
+	"deepseek-v4-pro",
+]);
 
 export type ProviderStatus = {
 	id: string;
@@ -68,7 +62,7 @@ const PROVIDER_LABELS: Record<string, string> = {
 	cerebras: "Cerebras",
 	huggingface: "Hugging Face",
 	"amazon-bedrock": "Amazon Bedrock",
-	"azure-openai-responses": "Azure OpenAI Responses",
+	azure: "Azure OpenAI",
 	litellm: "LiteLLM Proxy",
 };
 
@@ -113,12 +107,25 @@ const RESEARCH_MODEL_FAMILY_PREFERENCES: ResearchModelPreference[] = [
 		matches: (model) => model.provider === "opencode" && /^gpt-\d+(?:\.\d+)*(?:-.+)?$/i.test(model.id),
 		reason: "newest OpenCode Zen GPT fallback when direct OpenAI access is unavailable",
 	},
+	// GitHub Copilot writes Claude versions with dots (claude-opus-5.5).
+	{
+		matches: (model) => model.provider === "github-copilot" && /^claude-opus-\d+(?:[.-]\d+)*$/i.test(model.id),
+		reason: "newest Claude Opus model available through GitHub Copilot",
+	},
+	{
+		matches: (model) => model.provider === "github-copilot" && /^claude-sonnet-\d+(?:[.-]\d+)*$/i.test(model.id),
+		reason: "newest Claude Sonnet model available through GitHub Copilot",
+	},
+	{
+		matches: (model) => model.provider === "github-copilot" && /^gpt-\d+(?:\.\d+)*(?:-.+)?$/i.test(model.id),
+		reason: "newest GPT model available through GitHub Copilot",
+	},
 ];
 
 const RESEARCH_MODEL_FALLBACK_PREFERENCES: ResearchModelPreference[] = [
-	exactResearchModel("opencode/kimi-k2.6", "good OpenCode Zen fallback for coding and research work"),
+	exactResearchModel("opencode/kimi-k2.7-code", "good OpenCode Zen fallback for coding and research work"),
 	exactResearchModel("opencode/minimax-m2.7", "good OpenCode Zen fallback for source-heavy research work"),
-	exactResearchModel("opencode-go/kimi-k2.6", "recommended OpenCode Go model for coding and research work"),
+	exactResearchModel("opencode-go/kimi-k2.7-code", "recommended OpenCode Go model for coding and research work"),
 	exactResearchModel("opencode-go/minimax-m3", "good OpenCode Go fallback for source-heavy research work"),
 	exactResearchModel("opencode-go/qwen3.7-max", "good OpenCode Go fallback for source-heavy research work"),
 	exactResearchModel("opencode-go/glm-5.1", "good OpenCode Go fallback for GLM-backed research work"),
@@ -127,13 +134,10 @@ const RESEARCH_MODEL_FALLBACK_PREFERENCES: ResearchModelPreference[] = [
 		matches: (model) => model.provider === "openrouter" && /^openai\/gpt-\d+(?:\.\d+)*(?:-.+)?$/i.test(model.id),
 		reason: "newest OpenRouter OpenAI GPT fallback when direct OpenAI access is unavailable",
 	},
-	exactResearchModel("zai/glm-5", "good fallback when GLM is the available research model"),
 	exactResearchModel("minimax/MiniMax-M3", "good fallback when MiniMax is the available research model"),
 	exactResearchModel("minimax/MiniMax-M2.7", "good fallback when MiniMax is the available research model"),
 	exactResearchModel("minimax/MiniMax-M2.7-highspeed", "good fallback when MiniMax is the available research model"),
 	exactResearchModel("kimi-coding/kimi-for-coding", "Kimi Coding Plan stable ID, auto-maps to the latest backend model"),
-	exactResearchModel("kimi-coding/k2p6", "Kimi K2.6 with strong reasoning for coding and research tasks"),
-	exactResearchModel("kimi-coding/kimi-k2-thinking", "good fallback when Kimi is the available research model"),
 ];
 
 const PROVIDER_SORT_ORDER = [
@@ -160,8 +164,14 @@ function modelSpec(model: ModelRecord): string {
 	return `${model.provider}/${model.id}`;
 }
 
+// Premium tiers stay selectable with --model or /model but are never picked
+// automatically: Pro-class models and Claude Fable (priced above Opus).
+function isPremiumModel(model: ModelRecord): boolean {
+	return isProClassModel(model) || /^claude-fable-/i.test(model.id);
+}
+
 export function choosePreferredModelRecord<T extends ModelRecord>(available: T[]): T | undefined {
-	return available.filter((model) => !isProClassModel(model)).slice().sort(compareByResearchPreference)[0];
+	return available.filter((model) => !isPremiumModel(model)).slice().sort(compareByResearchPreference)[0];
 }
 
 function compareByResearchPreference(left: ModelRecord, right: ModelRecord): number {
@@ -209,8 +219,9 @@ function researchPreferenceReason(model: ModelRecord): string | undefined {
 export function isProClassModelSpec(spec: string | undefined): boolean {
 	const normalized = spec?.trim().replace(/^([^/:]+):(.+)$/, "$1/$2");
 	if (!normalized) return false;
-	const lowered = normalized.toLowerCase();
-	if (proClassAllowlist().some((entry) => lowered === entry || lowered.endsWith(`/${entry}`))) {
+	const separatorIndex = normalized.indexOf("/");
+	const modelId = (separatorIndex === -1 ? normalized : normalized.slice(separatorIndex + 1)).toLowerCase();
+	if (NON_PREMIUM_PRO_MODEL_IDS.has(modelId)) {
 		return false;
 	}
 	return PRO_CLASS_MODEL_PATTERN.test(normalized);
@@ -247,7 +258,7 @@ function compareCurrentModelFamily(left: ModelRecord, right: ModelRecord): numbe
 }
 
 function currentFamilyPreference(model: ModelRecord): CurrentFamilyPreference | undefined {
-	const anthropic = /^claude-(opus|sonnet)-(\d+(?:-\d+)*)$/i.exec(model.id);
+	const anthropic = /^claude-(opus|sonnet)-(\d+(?:[.-]\d+)*)$/i.exec(model.id);
 	if (anthropic) {
 		const family = anthropic[1]!.toLowerCase();
 		const parsedVersion = parseClaudeVersion(anthropic[2]!);
@@ -262,7 +273,7 @@ function currentFamilyPreference(model: ModelRecord): CurrentFamilyPreference | 
 	}
 
 	const openAi = /^gpt-(\d+(?:\.\d+)*)(?:-(.+))?$/i.exec(model.id);
-	if (openAi && (model.provider === "openai" || model.provider === "openai-codex" || model.provider === "opencode")) {
+	if (openAi && ["openai", "openai-codex", "opencode", "github-copilot"].includes(model.provider)) {
 		const suffix = openAi[2]?.toLowerCase();
 		return {
 			family: `${model.provider}/gpt`,
@@ -300,7 +311,7 @@ function currentFamilyPreference(model: ModelRecord): CurrentFamilyPreference | 
 }
 
 function parseClaudeVersion(rawVersion: string): { version: number[]; qualityRank: number } {
-	const rawParts = rawVersion.split("-");
+	const rawParts = rawVersion.split(/[.-]/);
 	if (rawParts.length >= 2 && /^\d{8}$/.test(rawParts[rawParts.length - 1]!)) {
 		const baseParts = rawParts.slice(0, -1).map(Number);
 		return {
@@ -312,7 +323,11 @@ function parseClaudeVersion(rawVersion: string): { version: number[]; qualityRan
 }
 
 function openAiGptQualityRank(suffix: string | undefined): number {
-	if (!suffix) return 0;
+	// Terra is OpenAI's standard tier (pi-web-access auto-selects the newest
+	// terra model too); Sol/Astra cost more and Luna is the small tier.
+	if (suffix === "terra") return 0;
+	if (!suffix) return 1;
+	if (suffix === "luna") return 9;
 	if (suffix === "chat-latest") return 2;
 	if (suffix === "codex-max") return 3;
 	if (suffix === "codex") return 4;
@@ -388,7 +403,7 @@ export async function getSupportedModelRecords(authPath: string): Promise<ModelR
 function readExpiredOAuthProviders(authPath: string): Set<string> {
 	const expired = new Set<string>();
 	try {
-		const parsed = JSON.parse(readFileSync(authPath, "utf8")) as Record<string, unknown>;
+		const parsed = readJsonFile(authPath) as Record<string, unknown>;
 		for (const [provider, credential] of Object.entries(parsed)) {
 			if (!credential || typeof credential !== "object") continue;
 			const typedCredential = credential as { type?: unknown; expires?: unknown };
@@ -473,8 +488,8 @@ export function buildModelStatusSnapshotFromRecords(
 	const guidance: string[] = [];
 	if (nonProAvailable.length === 0) {
 		if (proClassAvailableCount > 0) {
-			guidance.push("No non-Pro authenticated Pi models are available. Pro-class models are disabled in Feynman.");
-			guidance.push("Configure a non-Pro research model, then rerun `feynman model list`.");
+			guidance.push("No approved authenticated Pi models are available. Premium Pro-class models are disabled in Feynman.");
+			guidance.push("Configure an approved research model, then rerun `feynman model list`.");
 		} else {
 			guidance.push("No authenticated Pi models are available yet.");
 			guidance.push(
@@ -486,15 +501,15 @@ export function buildModelStatusSnapshotFromRecords(
 		if (recommended) {
 			guidance.push(`No default research model is set. Recommended: ${recommended.spec}.`);
 		} else {
-			guidance.push("No default research model is set, and no non-Pro research model is available for automatic selection.");
+			guidance.push("No default research model is set, and no approved research model is available for automatic selection.");
 		}
-		guidance.push("Run `feynman model set <provider/non-pro-model>` after choosing from `feynman model list`.");
+		guidance.push("Run `feynman model set <provider/model>` after choosing from `feynman model list`.");
 	} else if (!currentValid) {
 		guidance.push(`Configured default model is unavailable: ${current}.`);
 		if (recommended) {
 			guidance.push(`Switch to the current research recommendation: ${recommended.spec}.`);
 		} else {
-			guidance.push("Configure a non-Pro research model before using automatic model selection.");
+			guidance.push("Configure an approved research model before using automatic model selection.");
 		}
 	}
 

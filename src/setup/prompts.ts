@@ -1,13 +1,20 @@
 import {
+	type CANCEL_SYMBOL,
 	confirm as clackConfirm,
 	intro as clackIntro,
 	isCancel,
 	multiselect as clackMultiselect,
 	outro as clackOutro,
+	password as clackPassword,
 	select as clackSelect,
 	text as clackText,
 	type Option,
+	settings as clackSettings,
 } from "@clack/prompts";
+
+// clack treats h/j/k/l as arrow keys, so a question typed into a setup menu
+// moved the selection (often onto Cancel). Only the arrow keys move it.
+for (const key of ["h", "j", "k", "l"]) clackSettings.aliases.delete(key);
 
 export class SetupCancelledError extends Error {
 	constructor(message = "setup cancelled") {
@@ -22,13 +29,31 @@ export type PromptSelectOption<T = string> = {
 	hint?: string;
 };
 
+export function nonInteractiveTerminalMessage(env: NodeJS.ProcessEnv = process.env, platform = process.platform): string {
+	return [
+		"feynman setup requires an interactive terminal.",
+		platform === "win32" && env.MSYSTEM
+			? "Git Bash's default window is not one Node can prompt in: run `winpty feynman setup`, or use PowerShell or Windows Terminal."
+			: "Run it yourself in a terminal window, not through a script or an AI coding agent.",
+		"To skip the prompts, set your provider's API key variable (for example OPENAI_API_KEY or ANTHROPIC_API_KEY) and run `feynman model set <provider/model>`.",
+	].join("\n");
+}
+
+export function noModelMessage(promptGiven = false): string {
+	return [
+		"No model is set up yet, so Feynman can't answer.",
+		"Sign in with `feynman model login`, or set ANTHROPIC_API_KEY or OPENAI_API_KEY, then run feynman again.",
+		...(promptGiven ? ["Your question was not sent."] : []),
+	].join("\n");
+}
+
 function ensureInteractiveTerminal(): void {
 	if (!process.stdin.isTTY || !process.stdout.isTTY) {
-		throw new Error("feynman setup requires an interactive terminal.");
+		throw new Error(nonInteractiveTerminalMessage());
 	}
 }
 
-function guardCancelled<T>(value: T | symbol): T {
+function guardCancelled<T>(value: T | typeof CANCEL_SYMBOL): T {
 	if (isCancel(value)) {
 		throw new SetupCancelledError();
 	}
@@ -55,6 +80,7 @@ export async function promptText(
 	defaultValue = "",
 	placeholder?: string,
 	signal?: AbortSignal,
+	requiredMessage?: string,
 ): Promise<string> {
 	ensureInteractiveTerminal();
 
@@ -64,11 +90,32 @@ export async function promptText(
 			initialValue: defaultValue || undefined,
 			placeholder: placeholder ?? (defaultValue || undefined),
 			signal,
+			validate: requiredMessage ? (input) => (input?.trim() ? undefined : requiredMessage) : undefined,
 		}),
 	);
 
 	const normalized = String(value ?? "").trim();
 	return normalized || defaultValue;
+}
+
+export async function promptSecret(
+	question: string,
+	signal?: AbortSignal,
+	validate?: (value: string) => string | undefined,
+): Promise<string> {
+	ensureInteractiveTerminal();
+	const value = guardCancelled(
+		await clackPassword({ message: question, signal, validate: validate ? (input) => validate((input ?? "").trim()) : undefined }),
+	);
+	return String(value ?? "").trim();
+}
+
+// API keys are printable ASCII. A key typed with a non-Latin keyboard layout
+// fails every request with "Cannot convert argument to a ByteString".
+export function validateApiKeyInput(value: string): string | undefined {
+	return /^[\x21-\x7e]*$/.test(value)
+		? undefined
+		: "API keys contain only ASCII letters, digits, and symbols. Check your keyboard input language and paste the key again.";
 }
 
 export async function promptSelect<T>(

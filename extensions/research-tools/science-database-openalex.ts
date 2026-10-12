@@ -1,4 +1,5 @@
-import { searchExactOpenAlex } from "./science-database-openalex-exact.js";
+import { OPENALEX_API_KEY_HINT, openAlexRequestFailure, searchExactOpenAlex } from "./science-database-openalex-exact.js";
+import { createRequestPacer } from "./request-pacer.js";
 
 export type OpenAlexScienceDatabaseSource = "openalex";
 
@@ -77,7 +78,7 @@ function addAuth(url: URL): { credentialStatus: string; usingApiKey: boolean } {
 		url.searchParams.set("api_key", key);
 		return { credentialStatus: "OPENALEX_API_KEY present", usingApiKey: true };
 	}
-	return { credentialStatus: "OPENALEX_API_KEY missing; OpenAlex anonymous/demo budget may reject or throttle requests", usingApiKey: false };
+	return { credentialStatus: `OPENALEX_API_KEY missing. ${OPENALEX_API_KEY_HINT}`, usingApiKey: false };
 }
 
 function scrubOpenAlexEndpoint(url: URL): string {
@@ -96,27 +97,59 @@ function scrubOpenAlexText(text: string, url: URL): string {
 	return scrubbed;
 }
 
-async function fetchJson(url: URL): Promise<{ credentialStatus: string; endpoint: string; payload: unknown; usingApiKey: boolean }> {
-	const auth = addAuth(url);
-	const endpoint = scrubOpenAlexEndpoint(url);
+type OpenAlexResponse =
+	| { ok: true; payload: unknown }
+	| { ok: false; status: number; statusText: string; retryAfterMs?: number; body: string };
+
+// Semantic search allows one request per second (429 with Retry-After: 1), so
+// semantic requests are paced. A 429 that asks for a short wait, such as one
+// caused by a subagent in another process, is retried once.
+const semanticPacer = createRequestPacer();
+const SEMANTIC_MIN_GAP_MS = 1100;
+const MAX_RETRY_WAIT_MS = 5000;
+
+async function requestOnce(url: URL): Promise<OpenAlexResponse> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 	try {
 		const response = await fetch(url, {
 			headers: {
 				accept: "application/json",
-				"user-agent": "feynman-science-database-search/1.0 (https://github.com/companion-ai/feynman)",
+				"user-agent": "feynman-science-database-search/1.0 (https://github.com/Companion-Inc/feynman)",
 			},
 			signal: controller.signal,
 		});
-		if (!response.ok) {
-			const snippet = scrubOpenAlexText((await response.text()).slice(0, 4096), url).slice(0, 240);
-			throw new Error(`OpenAlex request failed: ${response.status} ${response.statusText}. ${snippet}`);
-		}
-		return { ...auth, endpoint, payload: await response.json() };
+		if (response.ok) return { ok: true, payload: await response.json() };
+		const retryAfter = response.headers.get("retry-after");
+		const retryAfterSeconds = retryAfter === null ? Number.NaN : Number(retryAfter);
+		return {
+			ok: false,
+			status: response.status,
+			statusText: response.statusText,
+			retryAfterMs: Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0 ? retryAfterSeconds * 1000 : undefined,
+			body: (await response.text()).slice(0, 4096),
+		};
 	} finally {
 		clearTimeout(timeout);
 	}
+}
+
+async function fetchJson(url: URL): Promise<{ credentialStatus: string; endpoint: string; payload: unknown; usingApiKey: boolean }> {
+	const auth = addAuth(url);
+	const endpoint = scrubOpenAlexEndpoint(url);
+	const request = () =>
+		url.searchParams.has("search.semantic") ? semanticPacer(SEMANTIC_MIN_GAP_MS, () => requestOnce(url)) : requestOnce(url);
+	let response = await request();
+	if (!response.ok && response.status === 429 && response.retryAfterMs !== undefined && response.retryAfterMs <= MAX_RETRY_WAIT_MS) {
+		const waitMs = response.retryAfterMs + Math.random() * 500;
+		await new Promise((resolve) => setTimeout(resolve, waitMs));
+		response = await request();
+	}
+	if (!response.ok) {
+		const snippet = scrubOpenAlexText(response.body, url).slice(0, 240);
+		throw openAlexRequestFailure(response.status, response.statusText, snippet, auth.usingApiKey, url);
+	}
+	return { ...auth, endpoint, payload: response.payload };
 }
 
 function shortOpenAlexId(value: unknown): string | undefined {
@@ -354,18 +387,18 @@ async function resolveDoiWork(doiWorkId: string): Promise<{
 export async function searchOpenAlex(params: SearchParams): Promise<Record<string, unknown>> {
 	const query = cleanQuery(params.query);
 	const limit = safeLimit(params.limit);
-	const exact = await searchExactOpenAlex(query);
+	const exact = await searchExactOpenAlex(query, limit);
 	if (exact) return exact;
 	if (/^rate-limit$/i.test(query)) {
 		if (!openAlexApiKey()) {
 			return withMeta({
 				error: "openalex_key_required",
-				message: "Set OPENALEX_API_KEY to check OpenAlex rate-limit and usage status.",
+				message: `Set OPENALEX_API_KEY to check OpenAlex rate-limit and usage status. ${OPENALEX_API_KEY_HINT}`,
 				totalCount: 0,
 				returned: 0,
 				results: [],
 				anonymousBudgetWarning: "OpenAlex rate-limit diagnostics require OPENALEX_API_KEY.",
-			}, "rate-limit", query, [], "OPENALEX_API_KEY missing; OpenAlex anonymous/demo budget may reject or throttle requests");
+			}, "rate-limit", query, [], `OPENALEX_API_KEY missing. ${OPENALEX_API_KEY_HINT}`);
 		}
 		const url = endpointPath("/rate-limit");
 		const result = await fetchJson(url);
@@ -509,9 +542,12 @@ export async function searchOpenAlex(params: SearchParams): Promise<Record<strin
 			}],
 		}, "work-detail", query, resolved?.endpoints ?? (result ? [result.endpoint] : []), resolved?.credentialStatus ?? result?.credentialStatus ?? "");
 	}
-	const parsed = parseKeyValueQuery(stripModePrefix(query, /^search(?::|\s+)/i));
+	// search.semantic is OpenAlex's embedding search: it finds conceptual matches
+	// keyword search misses, returns at most 50 rows, and takes no sort.
+	const semantic = /^semantic(?::|\s+)/i.test(query);
+	const parsed = parseKeyValueQuery(stripModePrefix(query, semantic ? /^semantic(?::|\s+)/i : /^search(?::|\s+)/i));
 	const url = endpointPath("/works");
-	if (parsed.text) url.searchParams.set("search", parsed.text);
+	if (parsed.text) url.searchParams.set(semantic ? "search.semantic" : "search", parsed.text);
 	const filters: string[] = [];
 	if (parsed.flags.year_from && parsed.flags.year_to) filters.push(`publication_year:${parsed.flags.year_from}-${parsed.flags.year_to}`);
 	else if (parsed.flags.year_from) filters.push(`publication_year:>${Number(parsed.flags.year_from) - 1}`);
@@ -520,7 +556,8 @@ export async function searchOpenAlex(params: SearchParams): Promise<Record<strin
 	if (booleanValue(parsed.flags.oa ?? parsed.flags.open_access) === true) filters.push("open_access.is_oa:true");
 	if (parsed.flags.source) filters.push(`primary_location.source.id:${normalizeEntityId(parsed.flags.source, "S")}`);
 	if (filters.length) url.searchParams.set("filter", filters.join(","));
-	const sort = sortParam(parsed.flags.sort ?? "relevance", Boolean(parsed.text));
+	if (semantic && !parsed.text) throw new Error("OpenAlex semantic search requires query text.");
+	const sort = semantic ? undefined : sortParam(parsed.flags.sort ?? "relevance", Boolean(parsed.text));
 	if (sort) url.searchParams.set("sort", sort);
 	if (!parsed.text && !filters.length) throw new Error("OpenAlex work search requires text or filters.");
 	url.searchParams.set("per-page", String(limit));
@@ -530,11 +567,11 @@ export async function searchOpenAlex(params: SearchParams): Promise<Record<strin
 	return withMeta({
 		search: parsed.text,
 		filters,
-		sort: parsed.flags.sort ?? "relevance",
+		sort: semantic ? "semantic" : parsed.flags.sort ?? "relevance",
 		totalCount: numberValue(recordValue(payload.meta).count) ?? rows.length,
 		returned: rows.length,
 		recordsTruncated: (numberValue(recordValue(payload.meta).count) ?? rows.length) > rows.length,
-		anonymousBudgetWarning: openAlexApiKey() ? undefined : "Set OPENALEX_API_KEY for real OpenAlex usage; anonymous/demo calls are limited by OpenAlex.",
+		anonymousBudgetWarning: openAlexApiKey() ? undefined : OPENALEX_API_KEY_HINT,
 		results: rows,
-	}, "work-search", query, [result.endpoint], result.credentialStatus);
+	}, semantic ? "work-semantic-search" : "work-search", query, [result.endpoint], result.credentialStatus);
 }

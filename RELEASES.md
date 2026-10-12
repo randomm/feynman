@@ -6,27 +6,936 @@ GitHub release notes are generated from the matching `## vX.Y.Z` section in this
 
 ## Unreleased
 
-## v0.3.12 - 2026-08-04
+## v0.5.39 - 2026-10-12
+
+- **Web search and fetching are steadier (pi-web-access 0.39.0).** Search summaries now read each source's snippet, so providers that return only links still produce a summary. `auto` search moves on when a provider returns nothing, a stalled Perplexity request gives up after 30 seconds, and a DuckDuckGo bot check is reported as a block instead of an empty search. `fetch_content` answers end with the `get_search_content` call that reads the stored page, answer mode with several URLs shows every page's answer, and PDFs can go to a document parser you run yourself (`pdf.provider: "endpoint"` in `~/.feynman/agent/web-search.json`).
+
+## v0.5.38 - 2026-10-12
+
+- **`/deepresearch` no longer waits for a "yes" after its plan.** About 1 in 5 people who started it never answered the approval question, so the research never ran. It now writes the plan, summarizes it, and continues, as `/lit` does. To check the plan first, say so in the request, for example `/deepresearch <topic>, show me the plan first`.
+- **A failed model call says what went wrong.** When the provider rejects a request, Feynman now names the cause and the fix under the error: a model your account can't use (pick another with `/model`), no credits, a rate limit or used-up quota, rejected credentials (`feynman model login <provider>`), or a temporary outage. Most failed `/lit` and `/audit` runs ended on one of these. Feynman bugs go to github.com/Companion-Inc/feynman/issues; Pi's `/bug` reports to Pi's developers.
+- Research runs on macOS and Linux no longer fail on `python: command not found`; Feynman tells the model to run `python3`.
+
+## v0.5.37 - 2026-10-12
+
+- **A sign-in that came back without a code says what to do.** When the browser returned to `feynman model login` or `feynman setup` without an authorization code (seen mostly on Windows), Feynman printed only "Missing authorization code". It now gives the same advice as for `invalid_grant`: sign out of the provider's site or use a private window, then retry, and for ChatGPT it suggests `feynman model login openai-codex`.
+
+## v0.5.36 - 2026-10-12
+
+- **A new user gets to a working model instead of a dead end.** Launching `feynman` with no model opens a menu to set one up.
+  - Typing a question there moved the selection onto Cancel: the menu treated `h`, `j`, `k` and `l` as arrow keys. Only the arrow keys move it now.
+  - Cancel used to go on to optional packages, an alphaXiv sign-in that defaulted to Yes, and pandoc, then said "Feynman is ready" with no model. It now exits and says how to add a model, and that your question was not sent.
+  - The first launch asks only for the model. Packages, alphaXiv and pandoc stay in `feynman setup`, where alphaXiv now defaults to No.
+  - Esc in a provider list goes back to the previous menu instead of ending setup.
+  - `feynman -p "…"` with no model now says how to add one, instead of pointing at Pi's `/login` and files inside `node_modules`.
+- `feynman help` drops the duplicate "Getting Started" list and calls the flag section "Options".
+
+## v0.5.35 - 2026-10-11
+
+- **PubMed group authors keep their affiliations.** Consortium and study-group authors came back with no affiliations; they now keep them, as individual authors do. Thanks to @KennyMcSimpson (#335).
+- **pi-subagents 0.77.0.** Subagent tools cost the lead agent far fewer tokens per request (the `subagent` tool's definition shrank from about 18,700 to 3,300 characters), and long subagent reports arrive as a preview plus the file path instead of the full text. Updating Feynman while a session is running no longer breaks every subagent launch in that session. A wrong agent or model name now comes back with suggestions.
+- **pi-btw 0.8.0.** The `/btw` side-chat composer completes slash commands, and side threads no longer fail with Anthropic's "references unknown tool" error.
+- `feynman -v` prints the version, and `--json`, `--work-dir` and `--path` now point to `--mode json` and `--cwd <dir>`.
+
+## v0.5.34 - 2026-10-09
+
+- **OpenAlex lookups that miss now say why.** Looking up a name or title where OpenAlex expects an ID (for example `openalex_get_work:Attention is all you need` or `author: Geoffrey Hinton`), or an ID that does not exist, returned OpenAlex's raw HTML "404 Not Found" page. The error now says no such work, author or source exists and names the search command to use instead, so the agent recovers on its next call.
+
+## v0.5.33 - 2026-10-09
+
+- **pi-web-access 0.38.0.**
+  - Web searches with no API key (Parallel) no longer fail with "free-tier rate limit".
+  - On a ChatGPT subscription, OpenAI web search now uses the newer, much cheaper `gpt-6-luna`, so searches take far less of your usage.
+  - `fetch_content` answer mode works with models whose provider signs in without an API key.
+  - Requests through a proxy keep their method, headers and body.
+  - Adds Ceramic, a paid search provider used only when you select it.
+- Security: pi-web-access now uses `@modelcontextprotocol/sdk` 1.32.1, so GHSA-6qxp-vccf-f47h no longer appears in `npm audit` for a Feynman install.
+
+## v0.5.32 - 2026-10-09
+
+- **A rejected sign-in now says what to do.** When `feynman model login` or `feynman setup` ended with `invalid_grant`, usually after Sign in with ChatGPT, Feynman printed only the provider's error. It now explains that a stale browser session usually causes it: sign out of the provider's site or use a private window, then run `feynman model login <provider>` again. For ChatGPT it also suggests `feynman model login openai-codex`.
+
+## v0.5.31 - 2026-10-09
+
+- **Feynman starts again if you once installed the old `session-search` package.** Its entry stayed in `~/.feynman/agent/settings.json` after the preset was removed. On Node 24 that made every launch fail installing it, or crash Pi through its SQLite module or its extension. Feynman now drops the entry on launch; Feynman's sessions are searchable with `grep` or `rg` over `~/.feynman/sessions`.
+
+## v0.5.30 - 2026-10-07
+
+- **Pi 1.1.0.** Claude browser login no longer fails with "localhost refused to connect" when port 53692 is reserved or in use (common with Hyper-V/WSL on Windows); it falls back to a free port. "Servers are busy" provider errors and Mistral stream errors are retried instead of ending the turn, fewer requests fail on context limits, and session costs count long prompts correctly. Adds Claude Haiku 5.5; Feynman's default for Anthropic stays Claude Opus.
+
+## v0.5.29 - 2026-10-07
+
+- **PubMed titles and abstracts keep their italic terms.** Text inside inline tags such as `<i>BRCA1</i>` was dropped, so a title read "patient with germline mutation" instead of "germline BRCA1 mutation", and gene names went missing from abstracts. Thanks to @KennyMcSimpson (#328).
+- **PubMed authors keep all their affiliations.** An author listed with two or more affiliations came back with none. Thanks to @KennyMcSimpson (#327).
+- Security: GHSA-6qxp-vccf-f47h (MCP SDK OAuth client). Feynman's own copies of `@modelcontextprotocol/sdk` move to 1.32.1. pi-web-access still pins 1.27.1 for its separate `npx pi-web-access` MCP server, which Feynman does not run and which does not use the affected OAuth client; it is updated in nicobailon/pi-web-access#522.
+
+## v0.5.28 - 2026-10-07
+
+- **Pi 1.0.4, pi-subagents 0.76.1, pi-web-access 0.37.0.**
+  - Pi: syntax highlighting keeps its colors across multiline strings and comments, MCP sign-in works on servers using OpenID Connect registration, and stalled Bedrock streams are retried.
+  - pi-subagents: when a subagent's result wakes the main session, that turn keeps its normal system prompt (subagent list, MCP servers, other extensions) and the provider's prompt cache. A per-tool timeout now names the tool instead of a run deadline that never fired.
+  - pi-web-access: a `web_search` or `fetch_content` call where nothing succeeded is now reported as a tool error, so the model knows to try something else; Perplexity results include page snippets and cost less.
+
+## v0.5.27 - 2026-10-06
+
+- **Pi 1.0.3.** Sign in with ChatGPT no longer fails with `refresh_token_invalidated` after a request is cancelled during a token refresh, and closing the terminal no longer reports a `read EIO` / `setRawMode EIO` crash. In fullscreen, `Home`/`End` now move within the input line; jump to the top or bottom of the transcript with `Ctrl+Home`/`Ctrl+End`.
+- **Azure OpenAI is now `azure`.** Pi renamed the provider from `azure-openai-responses`, and `feynman model login` now offers the new name. If you set up Azure before, run `feynman model login azure` again and rename the provider in `~/.feynman/agent/models.json` and `settings.json`; `AZURE_OPENAI_*` variables are unchanged.
+
+## v0.5.26 - 2026-10-05
+
+- **GitHub Copilot users get a research model by default.** Copilot names Claude models with dots (`claude-opus-5.5`), which Feynman did not recognize, so a new Copilot login fell back to alphabetical order and set `claude-haiku-4.5` as the default; Copilot then rejected it with "The requested model is not supported" for several users. Feynman now picks Copilot's newest Claude Opus, then Sonnet, then GPT. If `feynman status` shows `github-copilot/claude-haiku-4.5` and you did not choose it, run `feynman model set` to pick another.
+- `alpha_ask_paper` answers with the arXiv metadata and abstract, marked as a fallback, when alphaXiv does not answer (for example after the login expires), like `alpha_search` and `alpha_get_paper` already did.
+- `-p` is short for `--prompt`, as in Pi. `--setup`, `--list-models`, `--new`, `feynman setup model`, and `feynman model <provider/model>` now say which command was meant.
+- pi-web-access 0.36.0: `web_search` accepts lists that a model sent as a JSON string (nicobailon/pi-web-access#491), `fetch_content` asks docs sites for markdown first, Brave prepaid keys keep working, and a `fetch_content` call whose only URL failed is reported as an error.
+
+## v0.5.25 - 2026-10-05
+
+- **Pi 1.0.2 and pi-subagents 0.76.0.** Pi now uses the patched brace-expansion 5.0.12 (GHSA-q2hr-2g5m-vwhr, GHSA-qhr7-859c-m2p7, GHSA-6j4f-fj2g-mc7p), so Feynman's npm audit has no exceptions left, and an npm install pulls about 120 fewer packages. Pi also retries "model at capacity" errors instead of ending the turn, and Sign in with ChatGPT reports a busy callback port instead of "OAuth state mismatch". pi-subagents frees async slots held by abandoned workflows.
+- **A timed-out paper search no longer ends a research step.** A Semantic Scholar or OpenAlex topic search that hits the 25 s timeout is answered from the other index, and other sources say which one did not respond instead of "This operation was aborted".
+- **arXiv batch versions.** Looking up a bare arXiv ID alongside an older version now returns the latest version for the bare ID regardless of feed order. An unavailable explicit version is reported in `not_found` instead of resolving to a different version. Thanks to @Kunyanli230 (#322).
+
+## v0.5.24 - 2026-10-03
+
+- **Pi 1.0.** Feynman now runs on Pi 1.0.0, with pi-subagents 0.75.0 (background subagents start on Pi 1.0) and pi-btw 0.7.1 (allows Pi 1.x). The terminal UI is fullscreen by default and keeps its own scrollback; run `feynman --tui-mode regular`, or set `"tuiMode": "regular"` in `~/.feynman/agent/settings.json`, to use the terminal's normal scrollback. Launch warnings show inside the fullscreen UI. Pi 1.0 also adds MCP OAuth hardening, a copy-code Anthropic login for headless machines, and lower codemode token use.
+
+## v0.5.23 - 2026-10-02
+
+- **arXiv and PubMed rate limits.** arXiv asks for one request every three seconds, and parallel lookups got `429`; arXiv requests now run at that pace and a 429 is retried once. A PubMed `429`, which a subagent in another process or a shared IP can still trigger, is retried once after a pause.
+- Running several subagents at once from any workflow no longer fails with "workflow: true requires exactly one ```js workflow fenced block": Feynman now always writes the workflow script to a file and runs it by path, as `/deepresearch` already did.
+- Pi 1.0 is not in this release: pi-subagents 0.74.0 cannot start background subagents on it. The fix is merged upstream (nicobailon/pi-subagents#2634) and Feynman will move to Pi 1.0 once it is released.
+
+## v0.5.22 - 2026-10-01
+
+- **Launch warnings and the first-run telemetry notice show inside the session.** Feynman printed them to the terminal just before starting Pi, where Pi 1.0's fullscreen interface (coming in a later Feynman release) hides them for the whole session. They now appear in Pi's own interface: the Windows "No Bash found" warning, the small-local-model warning for research workflows, and the one-time telemetry disclosure. A one-shot `--prompt` run still prints them to stderr.
+- `feynman doctor` reports Pi's new `quietStartup: "header"` setting as "header only" instead of "disabled".
+
+## v0.5.21 - 2026-10-01
+
+- **LiteLLM and custom providers that read their key from an environment variable work again.** Since Pi 0.99, `models.json` resolves an environment variable only when written as `$NAME`; a bare name is sent as the key itself. Feynman's LiteLLM setup wrote `LITELLM_MASTER_KEY`, so requests went out as `Authorization: Bearer LITELLM_MASTER_KEY` and the proxy rejected them, and custom providers set up with a variable name broke the same way. Feynman now writes `$NAME`, and on start rewrites any `apiKey` in `models.json` that is a bare all-caps variable name, such as `LITELLM_MASTER_KEY`, to `$LITELLM_MASTER_KEY`. Literal keys, placeholders such as `local`, and `!command` values are left alone.
+
+## v0.5.20 - 2026-10-01
+
+- **Settings saved by Windows Notepad or PowerShell no longer stop Feynman.** Both can save UTF-8 with a byte-order mark, which JSON parsing rejects, so Feynman refused to start with "Invalid Feynman settings ... expected a JSON object", and other commands read the file as empty. Feynman now ignores the mark in `settings.json`, `auth.json`, and `web-search.json`, as Pi does. A settings file with a real JSON error now names the error, for example a trailing comma, instead of the generic message.
+
+## v0.5.19 - 2026-10-01
+
+- **Word drafts open without LibreOffice.** `document_parse` needs LibreOffice for `.docx` files, which most machines lack, so reviewing a thesis or draft in Word format failed. When LibreOffice is missing, Feynman now reads the document's paragraph text directly from the `.docx` and says so; install LibreOffice for page layout, tables, footnotes, and images.
+- `feynman_science_database_search` accepts the `"null"` some models send for an omitted `sort` or `limit`, which failed validation before the search ran.
+- **Pi 0.99.2** (faster prompt submission in long sessions; saved default models with extension providers load reliably), **pi-subagents 0.74.0**, and **pi-btw 0.7.0**. pi-subagents now ships the patched undici 8.10.2, so the undici security exceptions and Feynman's own undici pin are gone. It removed the `workflowScript` parameter; `/deepresearch` and `/summarize` now write the workflow script to `outputs/.plans/<slug>-workflow.js` and run it by path. Its other new form, an inline ```` ```js workflow ```` block, failed in testing when Claude put the block in its hidden reasoning, while a script file worked with every model, and the file stays next to the plan as a record of the run. Subagent children also follow the project's trust setting, and `/reload` no longer stops running background workflows.
+- Security: Pi 0.99.2 still locks brace-expansion 5.0.9; the exception for it stays until Pi ships 5.0.12.
+
+## v0.5.18 - 2026-09-30
+
+- **A rate-limited paper index no longer ends a research step.** When Semantic Scholar is rate-limited or down, a search is answered from OpenAlex, and an OpenAlex topic search that hits OpenAlex's anonymous rate limit or an outage is answered from Semantic Scholar. The result says first which index answered and why. Lookups by OpenAlex ID, DOI, author, venue, or citation still report the error, since the other index has no equivalent.
+- **alphaXiv tools answer when alphaXiv cannot.** If your alphaXiv login expired or alphaXiv does not respond, `alpha_search` returns OpenAlex semantic search results and `alpha_get_paper` returns the arXiv metadata and abstract for an arXiv ID, each marked as a fallback. Run `feynman alpha login` to get alphaXiv's reports back.
+- pi-web-access 0.35.0: OpenAI web search works when you signed in with ChatGPT (`feynman model login openai`), and Brave search keeps to its rate limits. The researcher is told to pass a search provider as a plain string, since some models sent `provider: "[\"parallel-mcp\"]"`, which `web_search` rejects; nicobailon/pi-web-access#491 makes `web_search` accept that form too.
+
+## v0.5.17 - 2026-09-30
+
+- **`feynman model login openai` works again.** Since Pi 0.99, Sign in with ChatGPT needs a stable ID for the installation, which Feynman did not pass, so the login failed at once with "requires a device ID (UUID)". Feynman now shares the `deviceId` Pi's own `/login` keeps in `~/.feynman/agent/settings.json`.
+- **Windows finds per-user Git Bash.** Pi looks for Git Bash only under Program Files and on PATH, but a per-user Git for Windows install puts only `Git\cmd` on PATH, so shell commands failed with "No bash shell found" (about one in five Windows installs that run tools). Feynman now finds that Git Bash and gives it to Pi. When there is no Bash at all, Feynman says so before the session starts, and `feynman doctor` reports the `bash` it found.
+- Pressing Enter at the "paste the authorization code / redirect URL" login prompt no longer ends the login with "Missing authorization code"; Feynman asks again, and finishing in the browser still works.
+- API keys are now masked as you paste them during setup, and a key with non-ASCII characters (for example typed with a non-Latin keyboard layout) is rejected with an explanation instead of failing every request with "Cannot convert argument to a ByteString".
+- A rejected `SEMANTIC_SCHOLAR_API_KEY` now says so instead of `request failed: 403 Forbidden`.
+
+## v0.5.16 - 2026-09-30
+
+- **Subagent research files land in the workspace.** When a workflow gave a subagent a relative output path such as `outputs/.drafts/<slug>-research-web.md`, pi-subagents saved it under `~/.feynman/sessions/subagent-artifacts/outputs/<run>/` instead, so the lead agent could not find the research notes, citations, or verification it asked for (about one in seven installs running research workflows hit this in the last week). Relative subagent outputs now resolve against the workspace, the researcher, reviewer, verifier, and writer no longer default to generic file names such as `research.md`, and `/deepresearch` and `/lit` name every subagent file under `outputs/.drafts/`. If you set `singleRunOutputBaseDir` in `~/.feynman/agent/extensions/subagent/config.json`, Feynman keeps your value.
+- `feynman packages remove <preset>` (also `rm` and `uninstall`) removes an optional package such as `memory`.
+- On Windows, Feynman no longer fails to start when another Feynman start is copying `keybindings.json` (`EBUSY: resource busy or locked`).
+- pi-web-access 0.34.0: `fetch_content` falls back to your other fetch providers on Cloudflare "Just a moment..." pages, web tools start available on models such as DeepSeek without costing a prompt-cache miss, and its undici moves to 8.11.2.
+- Security: three brace-expansion advisories published on 2026-09-29 affect the 5.0.9 that Pi 0.99.1's shrinkwrap locks, which Feynman cannot override. Pi uses it only for package filters and model patterns from your own settings and flags; the next Pi release that ships 5.0.12 replaces it. pi-subagents has still not released its undici fix.
+
+## v0.5.15 - 2026-09-29
+
+- **Pi 0.99.1, pinned.** Feynman accepted any Pi version, so npm installs picked up Pi 0.99.1 the day it was released, untested, and Pi 0.99 warns on every launch about how Feynman declared it. Feynman now runs on Pi 0.99.1, which adds MCP server support (`/mcp`), declared the way Pi asks, and pinned so new Pi releases arrive only after they pass Feynman's checks. If npm has `legacy-peer-deps` on, it skips Pi; `feynman` now says to reinstall with `--legacy-peer-deps=false` instead of failing on a missing package.
+- **npm installs use a patched undici.** pi-subagents pins undici 8.10.0, which ten advisories published on 2026-09-29 affect (plus GHSA-3wwx-pv8p-q78v), and npm hoisted that copy for every package in an npm install. Feynman now depends on a patched undici directly, so only pi-subagents keeps 8.10.0 until it releases its bump (nicobailon/pi-subagents#2548); the standalone installers were already patched. Correction to the 0.5.14 notes: pi-subagents' background runner installs its undici as the process-wide fetch and WebSocket, so the advisories do apply to background subagent runs.
+- **`feynman model set` explains a model it cannot use.** "Model not available in Pi auth storage" gave no reason. It now says which applies: the provider has no credentials (with the `feynman model login` command to run), a local provider in `models.json` has no `apiKey` (Pi hides providers without one; a placeholder such as `"local"` is enough), or the ID is unknown (with close matches, for example `gpt-5.6` suggests `openai/gpt-5.6-terra`).
+- **Parallel OpenAlex semantic searches no longer fail.** OpenAlex allows one semantic search per second, and parallel searches got `429 Too Many Requests`: in a live test of six at once, five failed. They now run one after another at that pace, and a 429 that asks for a short wait is retried once. Six parallel searches now all succeed.
+- `feynman model set` with no model opens a picker of the available models instead of failing. `feynman model help` lists the model commands, an unknown model subcommand points to it, and `-h` works like `--help`.
+
+## v0.5.14 - 2026-09-28
+
+- **The Windows installer no longer fails on slow networks (#309).** When usage telemetry could not reach PostHog quickly, the PostHog library printed a timeout to stderr, and Windows PowerShell treats stderr from the installer's `feynman --help` check as a failure. Each telemetry send now has a 1.5 s budget and ends quietly, so no command waits on telemetry (on a stalled network `feynman --help` took 11 s and printed two errors; it now takes about 2 s and prints nothing). The installers also run their checks with telemetry off and judge them by exit code.
+- pi-subagents 0.73.1 (no longer discards the prompt cache when subagents turn on; caps very large workflow output) and pi-web-access 0.33.0 (resumed sessions keep their tools; no false Pi version warnings). undici is overridden to a patched version for GHSA-3wwx-pv8p-q78v in the standalone installers; npm installs get the fix when pi-subagents releases its bump (nicobailon/pi-subagents#2548); pi-subagents only uses undici's HTTP proxy agent, not the affected WebSocket client.
+
+## v0.5.13 - 2026-09-28
+
+- **OpenCode no longer recommends a retired Kimi model.** OpenCode Go and OpenCode Zen retired `kimi-k2.6` ("Use kimi-k2.7-code instead"), but Feynman still picked it as the default for new OpenCode users. It now recommends `kimi-k2.7-code`. If `feynman status` shows `kimi-k2.6`, switch with `feynman model set opencode-go/kimi-k2.7-code`. Three model preferences that no longer exist in the catalog were removed.
+- A failed literature database request now names the service, for example `www.ebi.ac.uk request failed: 503`, instead of "Science database request failed".
+
+## v0.5.12 - 2026-09-28
+
+- Crossref pacing leaves a margin over the pool's limit and retries a rate-limited request once after the server's `Retry-After`. A stress test of three bursts of 10 parallel searches on the public pool now succeeds on all 30; 0.5.11 still lost about one in six to network jitter.
+
+## v0.5.11 - 2026-09-27
+
+- **Crossref lookups no longer fail in bursts.** Crossref's public pool allows one request at a time, one per second, and parallel DOI checks (the verifier cross-checks every citation) got `429 Too Many Requests` on most calls. Crossref requests now run one after another at the pool's pace. Set `CROSSREF_MAILTO` to your email for Crossref's faster polite pool; a 429 now says so instead of a generic "Science database request failed".
+- Telemetry's "wrote output" flag no longer misses a report written in the first second of a run on filesystems that round file times (HFS+, FAT, ext3).
+
+## v0.5.10 - 2026-09-27
+
+- **Semantic Scholar understands the documented query syntax.** A `semantic:` prefix and `year_from=`/`year_to=` flags, which the model reuses from the OpenAlex examples, were sent to Semantic Scholar as search text and returned unrelated papers or nothing. They now become Semantic Scholar's own year filter.
+- **The startup header lists only Feynman's workflows.** It also listed prompt commands that pi-subagents ships, such as `/parallel-review` and `/review-loop`.
+- **Cleaner README and landing page** with a current screenshot, and a shorter configuration page.
+
+## v0.5.9 - 2026-09-27
+
+- **Subagents keep their search tools in the foreground.** A `researcher` or `verifier` launched in the foreground failed at once because foreground children never load the parent's extensions, so `web_search`, `fetch_content`, and `feynman_science_database_search` were missing. Feynman now points pi-subagents' `defaultSubagentOnlyExtensions` setting at its research tools and pi-web-access, so every child has them, in the foreground or background.
+- **No alphaXiv account, no alphaXiv search tools.** Without an account, every `alpha_search`, `alpha_get_paper`, `alpha_ask_paper`, and `alpha_read_code` call failed, and research runs retried them. They are now registered only when you are signed in; otherwise papers come from Semantic Scholar, OpenAlex, and the other literature databases. Start a new session after `feynman alpha login`.
+- The Windows install docs now say Feynman needs Bash from Git for Windows for shell commands.
+
+## v0.5.8 - 2026-09-26
+
+- `FEYNMAN_HOME=~` or `~/path` now means your home folder. Unexpanded `~` (common in `.env` files, Docker `ENV`, and Windows shells) created a literal `~` folder in the current directory.
+- Starting two Feynman sessions at the same moment no longer crashes one of them with "Subagent config changed during settings normalization". The second start keeps the subagent config the first one wrote.
+
+## v0.5.7 - 2026-09-26
+
+- When Feynman runs as a package inside another Pi setup, an extension error no longer appears on every turn ("Cannot set properties of undefined (setting 'current_date')") if another extension or the host leaves the system-prompt sections unset (#298, thanks @Oscar-Williams in #300).
+
+## v0.5.6 - 2026-09-26
+
+### Failures report what went wrong
+
+- Usage telemetry now carries readable error text instead of a hash: the error message and stack trace (also sent to PostHog error tracking), the last lines of Pi's error output when a run exits with an error, a failed tool's error text, and the provider's error message on a failed model call. Your home folder is shown as `~`. Paths inside your projects can appear in this text. Prompts, model output, paper content, and tool arguments are still never sent. Opt out with `FEYNMAN_TELEMETRY=off` as before.
+- CI runs and the test suite no longer report telemetry, so usage numbers count real installs only.
+
+### Fixes
+
+- A dead network connection now fails in about 15 seconds with `Connection error.` instead of retrying silently for over five minutes. Feynman had set a 6-retry, 5-second backoff that also applied to connection errors; it now uses Pi's default, and the old value is removed from existing settings. Rate limits are still retried with the provider's `Retry-After`.
+- `feynman setup` and `feynman model login` in a window Node cannot prompt in (Git Bash's default window, a script, or an AI coding agent) now explain how to proceed: `winpty`, PowerShell, or setting the provider's API key variable and running `feynman model set`.
+
+## v0.5.5 - 2026-09-24
+
+### Node.js 26
+
+- Feynman now runs on Node.js 26, the current release. The upper version limit is gone: Feynman needs Node.js 22.22.0 or newer, like Pi itself. Tests run on Node 22, 24, and 26.
+- The standalone installers bundle Node.js 24.21.0, the latest LTS release.
+
+### alphaXiv
+
+- When an alphaXiv call fails, the tool error now points the agent to `feynman_science_database_search` (arXiv or Semantic Scholar) or `fetch_content`, so a research run continues on another source instead of retrying a broken tool. A "not logged in" error names `feynman alpha login`.
+- The alphaXiv docs explain signing in from a machine without a browser (SSH, Docker, WSL): open the printed URL anywhere and paste the final `127.0.0.1:9876/callback` URL back into the terminal.
+
+### Other
+
+- The setup docs explain the most common reason local models write no files: a small context window. They show how to raise Ollama's context and set `contextWindow` and `maxTokens` in `models.json`.
+- feynman.is/privacy and feynman.is/telemetry go to the telemetry section, which lists what is collected and how to opt out.
+- Updated dependencies: pi-btw 0.6.1, posthog-node 5.53, @clack/prompts 1.8.1, and the website toolchain (Astro 7.3, @astrojs/react 7). CI uses actions/checkout and actions/setup-node v7 and wrangler 4.139.
+
+## v0.5.4 - 2026-09-24
+
+### Use Feynman from ACP editors
+
+- `feynman --mode rpc` now accepts `--no-themes`, the Pi flag the [pi-acp](https://github.com/svkozak/pi-acp) adapter passes, so Feynman runs in ACP editors such as Zed. Point pi-acp at Feynman with `PI_ACP_PI_COMMAND=feynman`; the setup guide has the Zed settings.
+
+### Removed what did not work
+
+- The optional `session-search` package preset is gone. It indexes `~/.pi/agent/sessions` and never saw Feynman's sessions in `~/.feynman/sessions`, and its `/search` collided with pi-web-access's. Search past sessions with `grep` or `rg` over `~/.feynman/sessions`; the session-search skill now shows how.
+- `/preview` is no longer listed in `/help`: no bundled or optional package provides it. `feynman setup preview` still installs pandoc, and the preview docs show how to render artifacts to HTML or PDF.
+- `/help` lists pi-web-access's real `/websearch` and `/curator` commands instead of `/web-results`, which pi-web-access 0.31 no longer registers.
+- The autoresearch and alpha skills no longer mention tools and patches that do not exist.
+
+### Docs match the code
+
+- Every docs page, the landing page, and the README were checked against the CLI, prompts, agents, and package code. Corrections include the setup flow (model access, optional packages, alphaXiv login, pandoc), where keys are stored (plain text in `~/.feynman/agent/auth.json` with user-only permissions, not encrypted), the verifier, reviewer, and writer roles and which workflows use them, workflow steps and output files, the web-search tools and commands, and dead Pi links (now `earendil-works/pi`).
+- The landing page adds a PowerShell install command and drops cards for features that do not ship.
+
+## v0.5.3 - 2026-09-24
+
+### Leaner prompts, same research quality
+
+- The system prompt and the 11 workflow prompts lost about 200 lines. A block of tool-name rules was copied into every workflow and repeated in the system prompt, and the prompts referred to memory, process, chart, and experiment tools Feynman does not ship, `FEYNMAN_SUMMARIZE_*` environment variables that nothing reads, and a PDF crash that no longer exists.
+- Workflows now wait for their background subagents before the final answer. In one-shot `feynman --prompt` runs, a `/lit` run could end while its reviewer was still working and never write the provenance file.
+- On the `/lit` eval with GPT-5.6 Terra, 4 of 4 questions finished, all 44 citations resolved with matching titles, and each question ran the researcher, verifier, and reviewer in under 11 minutes (0.5.2: 9-14 minutes, 43 of 43 citations).
+
+### Smaller install
+
+- CLI telemetry sends its command events through posthog-node, like the rest of Feynman. It no longer also sends each command as an OpenTelemetry span and two log records, which removes nine `@opentelemetry` packages (about 28 MB). The events and what they contain are unchanged.
+
+### Known issue
+
+- Claude Opus 5.5 refuses some biology literature reviews (for example `/lit CRISPR base editing`) with "The model refused to complete the request". The same topics run on GPT-5.6 Terra.
+
+## v0.5.2 - 2026-09-23
+
+### Faster, cheaper research runs
+
+- OpenAlex exact searches (`openalex_search_works`, citations, references, authors, venues) now return at most the tool's `limit` (default 5, max 20) instead of 50-100 full records; an explicit `max_records` is capped at 50. In live `/lit` runs these results were 100-240 KB per call and drove most of the multi-million-token usage.
+- The `researcher` and `verifier` subagents run in the background by default, where they get Feynman's web and literature tools. Foreground launches of these agents failed and had to be retried.
+- `alpha_ask_paper` now states it takes arXiv and alphaXiv papers only, and points DOI-only papers to `fetch_content` or Europe PMC full text.
+
+## v0.5.1 - 2026-09-23
+
+### Telemetry
+
+- **Research runs are now visible in telemetry, without content.** The research extension inside Pi sends `feynman_session_started`, `feynman_workflow_started` and `feynman_workflow_completed` (workflow name such as `deepresearch` or `chat`, status, tool and subagent call counts, whether anything under `outputs/` or `papers/` was written, duration), `feynman_tool_used` (tool name and error flag), and one PostHog LLM analytics `$ai_generation` event per model response (model, provider, token counts, latency, HTTP status, stop reason; the trace ID is the Pi session ID). Prompts, model output, paper content, file paths, and tool arguments are never sent.
+- **First-run notice.** The first interactive run prints a one-time notice on stderr (never in scripts or CI) saying telemetry is on, what it collects, and how to turn it off with `FEYNMAN_TELEMETRY=off`. `feynman status` shows whether telemetry is on.
+- Telemetry stays on by default and follows the existing opt-outs: `FEYNMAN_TELEMETRY=off` or `DO_NOT_TRACK=1` disables the CLI and the Pi runtime events alike.
+
+## v0.5.0 - 2026-09-23
+
+### Stock Pi runtime
+
+- **Pi 0.87.1, unmodified.** Feynman now runs Pi's own CLI and no longer patches Pi or its packages on disk, renames Pi, or wraps its CLI. It also drops the sealed runtime workspace (the `.feynman/runtime-workspace.tgz` archive, its hashes, and its lock), which was re-verified on every launch. `feynman --help` and `feynman doctor` start in about a second instead of several.
+- **Newer Pi packages.** pi-subagents 0.71, pi-web-access 0.31, pi-btw 0.6, and pi-docparser 4.0 are now ordinary npm dependencies of Feynman, with their own dependency pins. They load as Pi packages from Feynman's install directory, so subagents see the same tools as the main session. pi-docparser's LiteParse pin (2.10.1) is used as shipped.
+- **Newest standard models recommended.** With Pi 0.87.1's catalog, setup and `feynman model` recommend Claude Opus 5.5 and, for OpenAI-only setups, GPT-5.6 Terra (OpenAI's standard tier, the same one pi-web-access picks). Premium tiers such as Claude Fable and Pro models are never picked automatically but stay available through `--model` and `/model`.
+- **Pi session flags pass through.** `--continue`/`-c`, `--resume`/`-r`, `--session <path|id>`, `--fork <path|id>`, `--no-session`, and `--export <session.jsonl> [out.html]` now reach Pi instead of being rejected.
+- **Settings are written once.** Feynman writes its defaults on first run and afterwards only adds missing keys. Package entries from older releases are replaced with the bundled packages, and other packages you added are kept.
+- **`feynman update` and `feynman packages install`** now go through Pi's own `pi update --extensions` and `pi install`. Optional packages install into `~/.feynman/agent/npm`. Pi and the core packages update when you upgrade Feynman.
+- **One-shot runs exit when they finish.** The alphaXiv connection now closes when the session ends, so `feynman --prompt` and JSON runs no longer stay open after answering.
+- **Explicit prompts never wait on stdin.** `feynman --prompt` and workflow commands started from a non-interactive parent no longer hang on an idle stdin pipe. Pipe text without `--prompt` to use it as the prompt.
+- **`/feynman-model` is gone.** Use Pi's `/model` for the main model and pi-subagents' `/subagents` or `subagents.agentOverrides.<name>.model` for one subagent. Feynman now sets `subagents.agentExcludeDirs` to `["~/.agents"]`, so agent files there no longer silently replace Feynman's bundled agents.
+- **Gemini Web cookie access** uses pi-web-access's own `allowBrowserCookies` and `browserCookies.profile` keys in `web-search.json`. The Feynman-only `geminiBrowser`, `allowBrowserAuth`, `browserAuth`, and `chromeProfile` keys are no longer read. Set `allowBrowserCookies` if you had enabled one of them.
+- **Web search config moved** to `~/.feynman/agent/web-search.json`, where pi-web-access reads it. An existing `~/.feynman/web-search.json` is moved there on first launch.
+- **Bundled agents, skills, and the theme** now load from the Feynman package instead of being copied into `~/.feynman/agent`. Copies left by older releases are deleted on first launch unless you edited them; edited copies keep overriding the bundled ones.
+- **Telemetry:** pi-otel is no longer bundled, so the Pi runtime is not traced. Feynman still sends its own opt-out CLI command events, logs, and spans to PostHog.
+
+## v0.4.0 - 2026-09-23
+
+### Focused on the research loop
+
+Feynman now ships only what serves finding papers, reading them, synthesizing with verified citations, auditing papers against code, and planning replications. Removed:
+
+- **Science workbench:** `feynman serve` and its `--port`, `--no-open`, `--no-auth` and `--host` flags, the local web app, its demo seed data, and the workbench-only Pi tools `feynman_connector_tools`, `feynman_connector_call`, `feynman_workbench_context`, and `feynman_open_chemistry_sketcher`. The molecule, genome, alignment, and structure viewer libraries are no longer installed with Feynman.
+- **Non-literature databases:** `feynman_science_database_search` now covers OpenAlex, arXiv ID lookup, PubMed, Europe PMC (including open-access full-text sections), bioRxiv/medRxiv, and Crossref. Biomedical, chemistry, genomics, variant, omics, regulatory, clinical-trial, grants, protein and structure sources were removed, along with DataCite. The tool's prompt text went from about 17 KB to about 2 KB per session.
+- **Model endpoints:** the NVIDIA BioNeMo `feynman_model_endpoint_call` tool.
+- **Skills:** protein and bio model templates (AlphaFold2, OpenFold3, Boltz, Chai-1, ESMFold, ESM2, Evo 2, Borzoi, DiffDock, ProteinMPNN, LigandMPNN, SolubleMPNN, scGPT, scvi-tools, indication dossier), Modal/RunPod/SSH/model-endpoint compute templates, and the `customize`, `self-awareness`, `product-self-knowledge`, `contributing`, `skill-creator`, `figure-composer`, `figure-style`, and `paper-narrative` skills. `/replicate` and `/autoresearch` still offer Docker, Modal, and RunPod as execution choices.
+- **Commands:** `/commands` and `/capabilities`. Use `/help` for the grouped command list and `/tools` for the tool list.
+- **Workflows:** `/watch` and `/jobs` (and `feynman watch` / `feynman jobs`). Both depended on a `schedule_prompt` scheduler tool that Feynman does not ship, so they could only report scheduling as blocked.
+- **PaperRank and paper access:** `feynman rank` (with `--limit`, `--expand-citations`, `--full-text-top`, `--critique-top`, `--synthesize`, `--synthesis-top`, `--synthesis-model`, `--preference-file`, `--reproduction-notes`, `--source-fixture`, `--output-dir`, `--json`) and `feynman paper` (`--fetch-full-text`). PaperRank seeded from an OpenAlex keyword search without an API key and missed seminal papers that a citation-sorted search finds; use `/lit` or `/deepresearch`, which search, rank, and read papers through the literature tools. For one paper's full text, ask the agent, which uses Europe PMC, PubMed, and `fetch_content`.
+- **arXiv topic search:** the `arxiv` source of `feynman_science_database_search` now only looks up papers by arXiv ID (bare IDs, URLs, or `arxiv_get_papers:`). `arxiv_search:` and free-text queries were removed because arXiv's lexical API ranked concept queries poorly (0 of 9 seminal papers in the search benchmark); search topics with `semanticscholar` or `openalex` instead.
+- **Removed commands exit with a pointer:** `feynman serve`, `watch`, `jobs`, `rank`, and `paper` now print that the command was removed after 0.3.49 and exit with status 1 instead of starting a chat with that word as the prompt.
+- **Local state:** Feynman no longer creates `~/.feynman/active-org.json` or `~/.feynman/orgs/`. Existing workbench data in those folders is left in place; delete it if you no longer need it.
+
+Everything removed is preserved in the repository at the `archive/pre-deslop-0.3.49` git tag. To recover a piece, check it out from that tag, for example `git checkout archive/pre-deslop-0.3.49 -- src/workbench workbench-web`, or install `@companion-ai/feynman@0.3.49` to keep using the workbench.
+
+### Paper search
+
+- **Semantic Scholar source:** `feynman_science_database_search` gains `source: "semanticscholar"`. By default it runs a bulk search sorted by citation count and keeps the top results (up to 20), which found 7 of 9 seminal papers in the search benchmark versus 2 for OpenAlex keyword search. `sort: "relevance"` uses relevance search and `sort: "pub_date"` returns newest first. Set `SEMANTIC_SCHOLAR_API_KEY` (free on request) to use your own rate limit; without it, a 429 from the shared anonymous pool is retried once and then reported with instructions.
+- **OpenAlex semantic search and key guidance:** prefix an `openalex` query with `semantic:` to use OpenAlex's embedding search (`search.semantic`), which found the test-time-compute paper at rank 1 where keyword search missed it. `OPENALEX_API_KEY` is still sent as the `api_key` parameter when set; when it is missing, results and 401/403/429 errors now say how to get a free key.
+- **Researcher and verifier guidance:** the researcher now routes by need (Semantic Scholar for general ML/CS papers, PubMed and Europe PMC for biomedicine, OpenAlex for citation graphs and semantic search, `web_search` for web sources with keyless Parallel MCP as a fallback, direct ID lookup for known papers) and runs 2–4 reworded queries per question instead of trusting one. The verifier cross-checks each cited paper's DOI or arXiv ID against two indexes and flags title/ID mismatches. Both agents can now call `feynman_science_database_search`. If you customized `~/.feynman/agent/agents/researcher.md` or `verifier.md`, Feynman keeps your copy, so merge these changes by hand.
+
+### alphaXiv
+
+- Updated the bundled alphaXiv client to `@companion-ai/alpha-hub@0.1.5`, which now ships the fixes Feynman used to patch in at install time: opening the login browser from WSL, printing the login URL when no browser opens, and falling back to REST search when `discover_papers` is unavailable. It also adds a paste-the-URL login for headless sessions, fixes a hang in parallel searches, and writes the token file with `0600` permissions. Feynman no longer patches alpha-hub.
+- Updated `@companion-ai/alpha-hub` to 0.1.6. Expired alphaXiv tokens are now refreshed before paper tool calls instead of failing with "Invalid Authorization", concurrent calls share one refresh, logging out can no longer be undone by an in-flight refresh, the auth file is written atomically with `0600` permissions, and `feynman alpha status` checks the login with the alphaXiv server.
+
+## v0.3.49 - 2026-09-23
+
+### Repository and package home
+
+- Feynman is back at `Companion-Inc/feynman` on GitHub and `@companion-ai/feynman` on npm. Installers, skills downloads, self-update checks, package metadata, research-source request identities, and docs use the Companion locations directly.
+- `@companion-ai/feynman` 0.3.47 installs now see this update through `feynman`'s normal update notice. If you installed the interim `@advaitpaliwal/feynman` 0.3.48 package, migrate once with `npm uninstall -g @advaitpaliwal/feynman`, then `npm install -g @companion-ai/feynman`. The command remains `feynman`, and native install commands are unchanged.
+
+### Telemetry privacy
+
+- Research-runtime traces no longer include OpenTelemetry's automatic process and host attributes, which carried the command line (including the system prompt and any prompt passed as an argument), host name, and user name. Telemetry now goes to the new Feynman PostHog project; `FEYNMAN_TELEMETRY=off` or `DO_NOT_TRACK=1` still disables it.
+
+### Startup and Windows reliability
+
+- `feynman --version` answers immediately instead of first verifying the whole bundled research runtime, and healthy launches skip one redundant full runtime validation pass.
+- Fixed macOS and Linux standalone bundles whose `node_modules/.bin` command links pointed at the build machine, which also blocked this release.
+- Windows: patching the bundled Undici proxy runtime copies real files instead of recreating symlinks, so commands no longer fail with EPERM on non-elevated accounts; transient antivirus locks on freshly written esbuild binaries are retried.
+- Removed Feynman's own `/thinking` command; Pi's built-in `/thinking` now handles thinking levels without a startup conflict warning.
+
+### Research runtime refresh
+
+- Updated the coordinated Pi runtime to 0.85.1, retaining Feynman's provider identity checks, research-session continuity, bounded compaction, private state files, and tool/telemetry safeguards.
+- Updated native bundles to Node 24.20.0 and the research runtime compiler to esbuild 0.28.2. Kept portable npm installs within the existing package budget by removing redundant compiler binaries and dependency source maps, not platform support.
+- Updated web research to pi-web-access 0.28.0 with bounded batch searches, retrievable response IDs, citation preservation, and session-scoped page-answer models. Browser cookies and new paid providers remain opt-in.
+- Updated pi-subagents to 0.65.1. Research delegation now uses async workflow scripts with `runs.run` / `runs.all`; obsolete top-level `tasks` / `chain` parameters and `/chain` / `/parallel` commands are replaced by the documented workflow interface. Existing user settings are preserved; fresh installs disable automatic missions and Fleet UI.
+- Moved the bundled paper tools to `@companion-ai/alpha-hub@0.1.4`, including the current alphaXiv OAuth/MCP API and result parser. Updated LiteParse to 2.14.3 while retaining document integrity checks.
+- Refreshed the CLI, scientific viewers, telemetry, and website dependencies. The CLI builds with TypeScript 7; the website retains TypeScript 6 because its current Astro/ESLint integrations require the older compiler API. Preserved supported dependency majors and upstream-required pins rather than forcing incompatible upgrades.
+
+## v0.3.48 - 2026-09-06
+
+### Installation and source reliability
+
+- Moved the canonical GitHub repository to `advaitpaliwal/feynman`. Native installers, skills downloads, package source/issue metadata, and public documentation now use the new owner directly.
+- The canonical npm package is now `@advaitpaliwal/feynman`. Migrate old npm installs with `npm uninstall -g @companion-ai/feynman`, then `npm install -g @advaitpaliwal/feynman`. Future npm updates use `npm install -g @advaitpaliwal/feynman@latest`. The command remains `feynman`, and native install commands are unchanged.
+- Historical release attestations retain their original source identity; new releases are verified against the new repository owner without relaxing provenance checks.
+- Updated affected URL/query parsing dependencies in the CLI and bundled research runtime, plus the website's browser-target resolver, to patched versions.
+
+## v0.3.47 - 2026-08-26
+
+### Research continuity
+
+- Resuming a valid Pi session whose JSONL file lacks a trailing newline now repairs the append boundary before new research messages are persisted, preventing the next record from being fused into the previous one.
+- `/btw` and `/btw:summarize` now copy extension-registered providers, native providers, and temporary runtime API keys into their isolated child `ModelRuntime`. Side research can use the same custom provider that is already active in the main session.
+
+### Web research
+
+- Updated `pi-web-access` to `0.25.0`. Researchers can route search and fetch calls through an explicit HTTP(S) proxy, retrieve bounded GitHub issue and pull-request documents with comments and review threads, use Defuddle when ordinary HTML extraction is insufficient, and select Chromium browser/profile cookies explicitly.
+- Gemini generate-content paths can use Google Application Default Credentials for Vertex AI, and Kimi Code Plan accounts can be selected explicitly for web search. Stored-content passage lookup also tolerates bridge defaults when `findText` is supplied.
+
+### Observability
+
+- Generic HTTP OTLP collectors configured through one shared endpoint now receive traces, metrics, and logs at their signal-specific `/v1/*` paths, including collectors on default HTTP and HTTPS ports. Explicit per-signal endpoints remain exact and retain their own headers and protocols; Feynman's PostHog AI trace endpoint is unchanged.
+- Existing `0.3.45` pi-otel package roots migrate through the reviewed legacy digest. Embedded package setup and runtime-workspace preparation preflight every discovered pi-btw and pi-otel root before applying their combined patch plan, so an unsupported later root cannot leave earlier research packages partially updated.
+- Session shutdown now flushes the telemetry SDK in its own handler, while `/otel` dashboard and collector overrides clear stale per-signal routing before rewiring exporters.
+
+### Proxy and credential safety
+
+- Explicit proxy credentials, target URLs, and provider request headers are delivered to curl over stdin instead of appearing in process arguments. GitHub repository clones now follow the same scoped proxy, `NO_PROXY`, and forced-direct decision as GitHub API requests.
+- Vertex ADC setup documentation no longer combines `geminiAuth: "adc"` with an API key that would select API-key mode.
+
+### Validation
+
+- Added exact source, published-upgrade, patch-plan transaction, package-tree, runtime-archive, executable OTLP handler, stdin-only proxy credential, GitHub clone proxy, installed-runtime OTLP behavior, GitHub document, Gemini ADC, Kimi credential, BTW provider, and unterminated-session regressions.
+- Runtime archives omit npm's pre-patch hidden lock metadata and verify its absence, so `npm ls` reads the committed exact lock instead of a stale nested Undici version.
+
+## v0.3.46 - 2026-08-26
+
+### Superseded release
+
+- Do not install `0.3.46`. Its canceled workflow was retried and published the superseded `6bbb6e8` tree with a pi-otel shutdown failure, explicit proxy/provider credentials in process arguments, and stale npm runtime metadata. Upgrade to `0.3.47` or later.
+
+## v0.3.45 - 2026-08-26
+
+### Release reliability
+
+- Windows publication smoke tests now use the supported .NET ZIP extractor instead of the pathologically slow PowerShell `Expand-Archive` cmdlet, so large native research bundles complete within the release job budget.
+- Source-checkout runtime archive rebuilds now use the same fifteen-minute process budget as exact locked runtime restores, avoiding premature timeouts on slow clean environments while retaining the existing transactional exact-lock checks.
+
+### Validation
+
+- Added workflow and runtime regressions that bind Windows native extraction and source-archive rebuilding to their supported timeout contracts.
+
+## v0.3.44 - 2026-08-26
+
+### Research continuity
+
+- Stopping a tool run now ends the active Pi loop before queued steering or follow-up research input can be drained into an already-aborted model call. The queued input remains available for the next turn instead of producing a second spurious cancellation.
+
+### Compaction integrity
+
+- Small-context local and proxy models now bound compaction reserve and retained-history budgets to the model's actual context window, preventing empty or short sessions from compacting continuously.
+- Empty or structurally unusable summaries no longer replace research history. OpenAI Responses providers such as Grok also omit `tool_choice` when a compaction request has no tools.
+
+### Model reliability
+
+- OpenAI-compatible structured reasoning deltas are accumulated without reparsing and reserializing the complete history for every streamed detail, preventing long reasoning streams from blocking the event loop while preserving same-model replay.
+- OpenAI models reached through Amazon Bedrock now receive images returned by research tools as sibling user-image blocks instead of unsupported images nested inside `toolResult.content`. Text stays attached to its tool result, image-only results retain an explicit placeholder, and Anthropic Bedrock models keep their native nested-image shape.
+
+### Runtime reliability
+
+- Non-interactive Pi extension handler work now has a cumulative 30-second budget. A handler that never settles reports its extension and event, expires its local context, safely absorbs late settlement, and lets later handlers and the research session continue.
+- Timed-out model-tool and user-shell policy handlers still allow later policy handlers to run, then fail closed. User-shell interception returns an explicit non-executing result, so both TUI and RPC paths do not run the command after a policy timeout.
+- Project trust, OAuth, and interactive dialogs preserve their supported behavior: documented UI prompts pause the remaining handler budget instead of resetting it, parent cancellation settles even a non-cooperative dialog, and OAuth callbacks remain outside the bounded event runner.
+
+### Document research
+
+- Updated the bundled LiteParse runtime to `2.14.0`. OCR rasterization now runs in bounded worker-sized rounds, and dense PDF layout deduplication avoids quadratic work. Existing parse, search, and screenshot interfaces are unchanged.
+
+### Validation
+
+- Added executable abort-queue, Responses payload, structured-reasoning scale, small-context compaction, and summary-usability regressions across the maintained Pi runtime.
+- Added executable extension-handler deadline coverage for downstream progress, timeout reporting, expired contexts, late rejection handling, fail-closed TUI/RPC user-shell interception, cumulative dialog timing, parent cancellation, project trust, and tool permission dialogs.
+- Added exact source, root/nested runtime, package-tree, and runtime-archive verifier coverage for Bedrock tool-result images across bare, regional, and global OpenAI model IDs, with an Anthropic control.
+- Re-ran installed document parsing, page-count, search, screenshot, package-artifact, runtime, and clean-consumer verification against LiteParse `2.14.0`.
+
+## v0.3.43 - 2026-08-25
+
+### Installation reliability
+
+- Upgrading from an older Feynman installation no longer crashes while migrating a legacy `pi-subagents` package's agent diagnostics source. Fresh native-bundle installs and updates now tolerate the older management-source layout while preserving malformed-agent diagnostics.
+
+### Validation
+
+- Added an executable source regression for the `pi-subagents@0.37.2` management layout that previously raised `missing management list diagnostics` during `--version`.
+
+## v0.3.42 - 2026-08-25
+
+### Reasoning integrity
+
+- Same-model research turns now preserve structured reasoning metadata through session persistence and model replay instead of flattening or dropping it.
+- When research history crosses a provider boundary, Feynman strips provider-private reasoning fields before forwarding it, preventing incompatible metadata from leaking into the next model's context.
+
+### Runtime reliability
+
+- Runtime preparation now repairs stale Pi AgentCore copies to the current maintained patch before verification, so restored and installed research runtimes cannot retain an older patch shape.
+
+### Validation
+
+- Reasoning and AgentCore patch validators now fail closed on missing, mixed, or stale transformations across source, bundled, restored, installed, and package-artifact copies.
+
+## v0.3.41 - 2026-08-25
+
+### Research continuity
+
+- Custom research messages queued while a Pi turn is active now wait until the turn settles before they are persisted and emitted. Tool results remain adjacent to their calls, and `triggerTurn: false` notifications no longer corrupt resumable session history.
+- Extension-supplied research prompts now preserve interleaved text and image order through idle, steering, and follow-up delivery, so captions and questions stay attached to the intended figure.
+- Large rendered tool diffs no longer hit V8's argument-count limit. Feynman's Pi runtime also resolves `fd` and `rg` releases through GitHub's public redirect without spending anonymous API quota.
+
+### Research images
+
+- JPEG conversion and provider-bound resizing now continue past XMP APP1 metadata to apply a later EXIF orientation block. Figures, scans, photographs, and microscopy images no longer remain sideways when XMP precedes EXIF.
+
+### Model reliability
+
+- OpenAI-compatible Gemini 3 streams now preserve the first Google thought signature and encrypted reasoning details together across persisted tool-call replay.
+- Foreign OpenAI-compatible tool-call IDs now retain the full hash when they must be sanitized and bounded, reducing cross-provider replay collisions.
+- OpenRouter's structured `in_flight_budget_exhausted` 402 responses can use their `Retry-After` budget without replacing ordinary 429 and server-error retries or overriding an explicit provider no-retry response.
+- OpenAI-compatible compaction no longer sends `tool_choice: "none"` when no tools are present, avoiding requests that strict gateways reject before summary generation.
+
+### Runtime reliability
+
+
+### Validation
+
+- Ported the focused Pi fixes from commits `240eb29c` (following contributor precursor `7b1dcfd`), `8c16a558`, `6d05adb`, `94f6e7c`, `d8def812`, `fe37e9f9`, `27115254`, and `86c42324`, plus the structured OpenRouter retry correction, across source, bundled, restored, installed, and package-artifact copies. Added fail-closed source-map checks, restored-runtime coverage, provider and image regressions, and clean installed-package verification.
+
+## v0.3.40 - 2026-08-24
+
+### Research continuity
+
+- Image-only steering and follow-up messages are now removed from Pi's pending queue state when they are delivered. Research sessions that add screenshots, paper figures, or other image context no longer remain falsely marked as waiting on input after the model receives the image.
+
+### Validation
+
+- Reproduced the defect on the bundled Pi `0.84.2`: the agent queue was empty after image delivery while `pendingMessageCount` remained `1` and no clearing `queue_update` event was emitted. Ported the focused fix from commit `b67b3db` across source, bundled, restored, installed, and package-artifact copies, with executable steering and follow-up regressions plus fail-closed patch verification.
+
+## v0.3.39 - 2026-08-24
+
+### Research continuity
+
+- Pi no longer persists a partial compaction, split-turn, or branch summary when summary generation reaches its output-token limit. The incomplete checkpoint now fails explicitly so long research sessions retain the last complete context instead of silently replacing it with truncated history.
+
+### Reliability
+
+- Updated `posthog-node` to `5.51.1`. On Node 24.16 and later, each telemetry flush now sends gzip bytes directly instead of retaining a native `BlobReader` for the life of the process.
+
+### Validation
+
+- Backported Pi commit `97fa14e` across source, bundled, restored, installed, and package-artifact copies, with executable history, split-turn, and branch-summary regressions. Disabled stale upstream source-map directives in the forward-patched files so diagnostics cannot resolve the new guards to unrelated pre-patch TypeScript lines. Matched the PostHog fix to upstream commit `3593c43` and added a transport regression that requires a `Uint8Array` gzip body instead of a `Blob`.
+
+## v0.3.38 - 2026-08-24
+
+### Research artifacts
+
+- Congress.gov and GovInfo bill parsing now excludes paired white-on-white GPO operator and print-tracking stamps from parsed text, JSON text items, and document search. Removal requires matching metadata, geometry, and exact rendered-white regions, so visible bill text and visible text that merely resembles a stamp remain available.
+
+### Research runtime
+
+- Pi's edit tool now preserves the original CRLF, LF, and CR terminators outside each replacement. Exact and fuzzy edits no longer create unrelated full-file diffs in mixed-line-ending research code or data.
+
+### Validation
+
+- Reproduced the hidden-stamp path with official 2008 and 2026 GPO bill PDFs and verified consistent parsed artifacts and searches with visible body-text, same-geometry black, white-on-dark, and white-on-RGB-245 controls.
+- Added exact, fuzzy, multiline, bare-CR, restored-runtime, package-artifact, and clean installed-package regressions for the maintained Pi and pi-docparser patches.
+
+## v0.3.37 - 2026-08-23
+
+### Research visualization
+
+- Updated IGV to `3.8.5`. Embedded VCF, BED, and GFF genome previews now load IGV's legacy URL-mapping catalog from `igv.org` instead of raw GitHub, avoiding unnecessary blocked-origin warnings under restrictive content-security policies.
+
+### Validation
+
+- Matched the installed package to the published `3.8.5` npm artifact and upstream commit `1ff36cd`, with an executable regression for the supported mapping origin.
+
+## v0.3.36 - 2026-08-23
+
+### Research runtime
+
+- Cross-platform runtime repair now allows up to fifteen minutes for the exact locked npm restore. This keeps slow Windows and Node 25 clean installs from terminating a valid research-runtime rebuild at the previous five-minute process limit.
+
+### Validation
+
+- Reproduced the published `0.3.35` failure on Windows with Node 25 after npm exhausted the five-minute child-process budget, while the same package passed the other five Node/OS consumers and all three native installers.
+- Added an exact timeout regression and retained fail-closed lock, package-graph, and post-install verification.
+
+## v0.3.35 - 2026-08-22
+
+### Research runtime
+
+- Installed packages no longer accept a partial bundled-runtime extraction merely because the top-level research extensions happened to arrive first. Feynman verifies the complete staged tree before publishing it, retains only known Windows npm links whose targets exist, and runs fallback from the archive's exact npm lock with maintained runtime patches applied before publication.
+- Windows runtime restoration now recreates legacy Pi package aliases as traversable directory links before launch, with a copy fallback when links are unavailable.
+- Configured provider-qualified research subagents now fail explicitly if the child reports that it actually launched on a different active model, instead of silently completing with misleading model metadata.
+- Research prompts beginning with `-` now pass safely through Pi's standard `--` end-of-options delimiter instead of being mistaken for runtime options.
+- Updated `pi-web-access` to `0.24.2`. Automatic search prefers Codex-backed OpenAI search when the active model is `openai-codex`, keeps Exa first for other models, and reads Windows Chromium cookie expiries without overflowing JavaScript numbers.
+
+### Workbench security
+
+- Updated Ketcher to `3.17.2`, which renders monomer labels from opened chemistry artifacts as text instead of interpolating them as HTML.
+
+### Validation
+
+- Added atomic restore, completion-marker, package-lock-graph, missing-transitive-file, exact-lock fallback, pre-publication patch, crash-backup, stale-lock, stale-stage cleanup, Windows npm-link and Pi-alias repair, terminated-process, child-model verification, dash-leading prompt, exact `pi-web-access@0.24.2` source, model-routing, Windows-cookie, and Ketcher monomer-label regressions.
+
+## v0.3.34 - 2026-08-22
+
+### Research runtime
+
+- Existing Pi `auth.json` and dynamic `models-store.json` files now retain administrator-managed modes and ACLs when Feynman updates them. On POSIX systems, newly created state files still use owner-only `0600` permissions.
+- Research subagent guidance now directs explicit model selection through `feynman model list` and tells the parent to use an exact approved `provider/model`. Raw unscoped registry output is not added to the tool.
+- Bundled and restored alphaXiv research runtimes now retain structured search-result parsing after Feynman rebuilds their runtime archive.
+- Clean package builds now publish the bundled runtime archive only after compression closes, preventing intermittent partial-archive reads on Node 25.
+
+### Validation
+
+- Backported Pi's focused managed-state permission fix from commit `c49906e` and the Feynman-safe guidance portion of pi-subagents commit `62e0934`.
+- Added exact transformation, fail-closed, fresh-file, existing-mode, launch-root, restored-runtime, installed-package, registered-tool, runtime-archive parser, and atomic archive-publication regressions.
+
+## v0.3.33 - 2026-08-22
+
+### Research evidence
+
+- arXiv metadata now accepts only the requested paper's Atom entry plus exact HTTPS arXiv paper and PDF links instead of trusting labels or URL substrings from untrusted responses.
+- Europe PMC full text decodes XML entities exactly once, preserving nested encodings instead of changing their research meaning.
+- UCSC track descriptions now remove nested provider markup while preserving scientific comparisons in research results.
+- Updated `fast-xml-parser` to `5.11.0` for unsafe entity validation, multiple-DOCTYPE rejection, and malformed XML handling.
+
+### Workbench security
+
+- OAuth access tokens, refresh tokens, and pending PKCE state now use atomic writes. On POSIX systems, current and migrated destination stores use `0600` files inside `0700` workspace-state directories; workspace-controlled symlinks are rejected, and legacy workspace sources are never permission-mutated during migration.
+- Unexpected workbench request and OAuth callback failures now return generic responses. Local diagnostics retain only a standard error class and a bounded message fingerprint, not private paths or provider details.
+- Malformed launch cookies stay unauthorized without disrupting the workbench, invalid streaming requests fail before HTTP success, and interrupted streams end with an explicit terminal error instead of silent success.
+- End-to-end release workflows now declare read-only repository permissions explicitly.
+
+### Reliability
+
+- Updated `posthog-node` to `5.50.0`, including fixes for queue flushing, response-body timeouts, compression memory growth, shutdown, and telemetry value serialization.
+- Added executable regressions for XML entities, arXiv link origins, OAuth store permissions, generic server errors, UCSC markup, and workflow permissions.
+
+## v0.3.32 - 2026-08-21
+
+### Web research
+
+- Updated `pi-web-access` to `0.24.1`. Direct page retrieval now uses the upstream compatibility identity so more public sources return readable content.
+- GitHub source retrieval now validates repository identities and isolates clone-cache destinations by digest before cleanup.
+- `pdf.maxPages` can bound Datalab, Gemini, and local PDF extraction. It defaults to `100`.
+- `openaiSearchProviders` can choose the ordered Pi provider list used for OpenAI-compatible `web_search` calls.
+- Automatic search now prefers Codex-backed OpenAI retrieval when the active model is `openai-codex`; other models try Exa before OpenAI.
+- Opt-in Chrome and Edge research on Windows now reads modern large cookie-expiry values safely in addition to using the corrected PowerShell 5.1 DPAPI path.
+
+### Validation
+
+- Matched every patched source fixture to the published `pi-web-access@0.24.1` package and GitHub tag `v0.24.1`.
+- Preserved Feynman's exact config path, private cache, session model scope, Firecrawl loopback redirect confinement, browser-cookie opt-in, request deadlines, and Windows PowerShell 5.1 DPAPI correction.
+- Added executable retrieval-header, GitHub identity, PDF page-limit, model-aware provider-priority, large Windows cookie-expiry, restored-runtime, and installed-package regressions.
+
+## v0.3.31 - 2026-08-21
+
+### Research agents
+
+- Research subagents now stop after a context-window overflow instead of retrying the same oversized input on fallback models.
+- Completed subagent tools no longer remain marked active when Pi backfills a result without a separate execution-end event.
+- Logical subagent failures now reach the model as failed tool results. The model no longer treats an invalid or failed research-agent action as success.
+
+### Web research
+
+- Opt-in Gemini Web research on Windows can now read Chrome and Edge `v10` cookies through current-user DPAPI.
+- Chromium `v20` app-bound cookies remain blocked and now return a clear diagnostic instead of a false authentication success.
+
+### Validation
+
+- Ported only the focused upstream `pi-subagents` context-overflow, tool-result backfill, and logical-failure corrections into the bundled research-agent runtime.
+- Added exact-source, restored-runtime, installed-package, model-loop, tool-result backfill, logical-failure, and native Windows DPAPI regressions.
+
+## v0.3.30 - 2026-08-21
+
+### Web research
+
+- Readable page extraction now replaces inline `data:` URI payloads with bounded omission markers before content reaches model context, the fetched-content cache, or session persistence. Raw mode still returns the exact textual response body.
+- Self-hosted Firecrawl API endpoints may use `localhost`, `127.0.0.0/8`, or `::1`. The exception stays limited to the configured API origin, including redirects, and does not permit loopback research targets.
+- Linux curator launches now detach `xdg-open`, so the browser process cannot hold a completed web search open.
+
+### Validation
+
+- Ported three focused post-`0.24.0` fixes from `pi-web-access` while preserving Feynman's exact config path, private cache, session model scope, and existing provider controls.
+- Added executable readable/raw extraction, Firecrawl loopback and redirect isolation, Linux launch-failure, restored-runtime, and installed-package regressions.
+
+## v0.3.29 - 2026-08-21
+
+### Biomedical literature
+
+- Concurrent PubMed, ClinVar, GEO, and other NCBI requests now share one paced queue. Literature-review turns no longer drop NCBI evidence after a burst of `429 Too Many Requests` responses.
+- `NCBI_API_KEY` now reaches E-utilities while remaining redacted from reported provenance. Keyed requests use the higher NCBI budget, and `NCBI_MIN_REQUEST_GAP_MS` can set a wider delay for shared IP addresses.
+- PubMed request timeouts now cover the response body as well as the initial headers.
+
+### Research runtime
+
+- Summary-only compaction and branch requests now disable tool calls across Pi providers. Feynman also rejects unexpected tool-call responses before they can enter a research summary.
+- Provider-neutral tool choice now reaches Anthropic, Azure OpenAI, Bedrock, Google, Mistral, OpenAI, and Codex requests.
+- Updated `pi-web-access` to `0.24.0` for current provider routing, provider base URLs, redirect credential stripping, and summary-model thinking suffixes. Feynman's private cache, exact config path, model scope, browser-cookie opt-in, and request deadlines remain intact.
+
+### Validation
+
+- Reproduced the anonymous 12-search NCBI burst on `0.3.28` at `0/12`, then verified `12/12` successful calls with pacing.
+- Added executable history, split-turn, and branch-summary guards across source, package archives, and installed runtimes.
+- Matched every patched `pi-web-access@0.24.0` fixture to the published npm package before applying Feynman's maintained patch set.
+
+## v0.3.28 - 2026-08-18
+
+### Research agents
+
+- Delegated research now treats provider subscription usage-limit errors as retryable. Configured fallback models continue instead of ending the run.
+
+### Model inputs
+
+- Baseten GLM 5.2 and GLM 5.2 Fast now accept image inputs. Paper figures and other attached research images reach these models.
+- Pi's model-data manifest now matches every backported catalog shard and its final model structure.
+
+### Validation
+
+- Backported the two focused upstream corrections across local, packaged, restored, and installed runtime copies.
+- Added executable fallback behavior plus complete catalog hash and structure checks across source, package archives, and installed runtimes.
+
+## v0.3.27 - 2026-08-17
+
+### Provider reliability
+
+- Google and Vertex models now honor model-specific thinking-level maps. Extended or remapped levels produce the supported provider level and use its matching token budget.
+- Bedrock gateway response callbacks now receive the raw Smithy response headers. Provider routing and request headers no longer disappear before Feynman can record them.
+
+### Model catalogs
+
+- Removed deprecated Xiaomi MiMo model IDs while keeping the current MiMo 2.5 models across direct and token-plan providers.
+- Added the current China Z.AI Coding Plan models, including GLM-4.6V, GLM-5.1, and GLM-5V-Turbo. Matching API-priced models now report their reference costs.
+
+### Validation
+
+- Backported four focused fixes from Pi after `0.84.2` and applied them to root, nested, packaged, and restored runtime copies.
+- Added direct Google, Vertex, Bedrock, Xiaomi, and Z.AI regressions plus installed-package and archive checks.
+
+## v0.3.26 - 2026-08-17
+
+### Document research
+
+- Updated the bundled LiteParse runtime to `2.13.1`. Multi-line table headers now keep in-table cells between established columns instead of silently dropping them. The existing parse, search, and screenshot tools keep their current interface.
+
+### Validation
+
+- Added an installed-runtime regression that reproduces the lost table-header cell and checks the corrected Markdown table.
+- Re-ran the installed document parse, search, and screenshot flow against the bundled runtime.
+- Fixed cross-Node runtime repair to preserve the bundled exact package manifest and overrides. Node 22 consumers now keep LiteParse `2.13.1` instead of reinstalling pi-docparser's older transitive default.
+
+## v0.3.25 - 2026-08-16
+
+### Research agents
+
+- A malformed custom agent definition no longer blocks unrelated valid research agents from loading or running.
+- Direct requests for a malformed agent now report its invalid configuration instead of using a lower-priority definition.
+- Agent listings and doctor diagnostics now identify malformed definitions without stopping discovery.
+- The default subagent tool now uses concise split prompt metadata, reducing always-loaded instructions while keeping explicit full, compact, and custom modes.
+
+### Package reliability
+
+- Existing `pi-web-access@0.22.0` core pins now upgrade to the bundled `0.23.0` release before launch.
+
+### Validation
+
+- Backported the focused upstream `pi-subagents` malformed-agent isolation fix and added installed-runtime and stale-settings regressions.
+
+## v0.3.24 - 2026-08-15
+
+### Document research
+
+- Updated the bundled LiteParse runtime to `2.13.0`. Document parsing now improves garbled-text detection for mixed-font papers and uses layout-aware block classification for richer structured extraction. The existing parse, search, and screenshot tools keep their current interface.
+
+### Validation
+
+- Re-ran the installed document parse, search, and screenshot flow against the bundled runtime.
+
+## v0.3.23 - 2026-08-15
+
+### Provider login reliability
+
+- GitHub Copilot sign-in now enables model policies sequentially instead of sending a burst of parallel requests.
+- If Copilot rate-limits model discovery, Feynman honors `Retry-After` and retries once instead of ending sign-in.
+
+### Validation
+
+- Added exact source, packaged-runtime, and login regressions for the Copilot rate-limit path.
+
+## v0.3.22 - 2026-08-14
+
+### Web research
+
+- Updated `pi-web-access` to `0.23.0`. Researchers can use Firecrawl search and opt-in authenticated browser fetch profiles.
+- Preserved Feynman's exact web-search config path, private fetched-content cache, resolved Pi model scope, browser-cookie opt-in, raw-result default, and bounded primary-search deadline.
+
+### Research runtime
+
+- Updated the bundled Pi runtime to `0.84.2`. Fullscreen transcript search now supports match navigation and configurable match colors.
+- Managed tool downloads now report progress after the TUI mounts, and model catalog refreshes no longer restart when a selector opens during startup.
+- Optional non-nullable tool arguments that arrive as `null` are now omitted before execution, while other malformed arguments remain rejected.
+
+### Validation
+
+- Added exact-source gates for the `pi-web-access@0.23.0` contract and refreshed the packaged runtime lock and archive.
+
+## v0.3.21 - 2026-08-13
+
+### Document research
+
+- Updated the bundled LiteParse runtime to `2.12.0`. Document parsing now handles large documents more reliably and fixes rotated-page edge clipping and Markdown inline-code escaping. The existing parse, search, and screenshot tools keep their current interface.
+
+### Validation
+
+- Re-ran the installed document parse, search, and screenshot flow against the bundled runtime.
+
+## v0.3.20 - 2026-08-12
+
+### Current research
+
+- Added the local current date to parent research turns and `researcher` child sessions.
+- Required current-source checks for recent claims and stopped models from rejecting valid post-training data by date alone.
+
+### Package reliability
+
+- Reconciled Feynman-managed package sources to the exact bundled versions before launch.
+- Removed stale managed shadow installs while preserving custom package selectors, package filters, and optional packages.
+
+### Validation
+
+- Added clean stale-settings, stale-install, broken-symlink, custom-package, and installed model-context regressions.
+
+## v0.3.19 - 2026-08-11
+
+### Web research
+
+- Updated `pi-web-access` to `0.22.0`. Researchers can use Bocha as a configured search route.
+- Added `maxInlineContentChars` for larger fetched-page and stored-content slices. The default remains 30,000 characters, with a 200,000-character cap.
+
+### Reliability
+
+- Adopted upstream fetched-content cache hardening and removed Feynman's temporary storage replacement.
+- Preserved Feynman's exact config path, private cache location, model scope, browser-cookie opt-in, raw-result default, and 90-second primary-search deadline.
+
+### Validation
+
+- Added exact-source gates for Bocha routing, configurable content limits, cache hardening, and the full Feynman patch set.
+
+## v0.3.18 - 2026-08-11
+
+### Research agents
+
+- Loaded Feynman's research-tool extension explicitly in every bundled `researcher` child session.
+- Kept Hugging Face dataset and repository tools in the strict researcher allowlist without relying on ambient child discovery.
+
+### Reliability
+
+- Preserved custom researcher extension overrides while adding the bundled provider to default settings.
+- Made the published subagent smoke reject unavailable child-tool diagnostics even when the parent model repeats a child result.
+
+## v0.3.17 - 2026-08-11
+
+### Web research
+
+- Exposed the stored response ID in every single-URL `fetch_content` result, including short pages and failures. Researchers can now pass the exact ID to `get_search_content` instead of guessing from hidden tool details.
+- Bounded the fetched-page cache to 128 entries and 128 MiB. Feynman removes expired entries first, then evicts the oldest entries until both limits hold.
+
+### Security and reliability
+
+- Normalized fetched-content cache permissions to `0700` directories and `0600` files on macOS and Linux.
+- Rejected cache-directory and cache-entry symlinks, removed stale extension-owned temporary files, and moved writes to exclusive random temporary files with durable atomic replacement.
+- Made concurrent pruning tolerate entries that another Feynman process already removed.
+
+### Validation
+
+- Ported the focused storage repair from upstream `pi-web-access` PR `#241` at commit `b3e784f`, while retaining Feynman's exact custom configuration path.
+- Added regressions for model-visible response IDs, quota eviction, temporary-file cleanup, permissions, symlink rejection, and concurrent deletion.
+
+## v0.3.16 - 2026-08-10
+
+### Web research
+
+- Updated `pi-web-access` to `0.21.0`. Full fetched pages now live in a private external cache instead of session JSONL, so search-heavy sessions stay bounded and restore without loading page bodies into the transcript.
+- Added per-tool and per-command registration gates, direct-image and PDF extraction gates, and a configurable summary-generation deadline.
+- Documented the exact `get_search_content` argument constraints and added `/web-results` for browsing stored web results without conflicting with session search.
+
+### Reliability
+
+- Kept the fetched-content cache beside Feynman's exact web-search configuration, including custom `FEYNMAN_WEB_SEARCH_CONFIG` paths.
+- Preserved Feynman's project-local PDF scratch files, session model scope, browser-cookie opt-in, raw-result default, and bounded primary search deadline.
+- Restored automatic package reconciliation for workspaces that retained the `0.3.15` core package pins.
+
+### Validation
+
+- Verified the exact upstream `0.21.0` source through all `437` tests, typecheck, production audit, and package inspection.
+- Added regressions for external cache persistence, bounded session metadata, the `/web-results` gate translation, current feature markers, and installed tool and command registration gates.
+
+## v0.3.15 - 2026-08-10
+
+### Model selection
+
+- Fixed the Pro-class cost guard so exact DeepSeek V4 Pro model IDs remain selectable across Pi providers. These open-weight models use ordinary provider pricing even though their product name contains `Pro`.
+- Kept premium service tiers such as Gemini Pro and `o1-pro` blocked. Feynman does not provide a broad environment-variable bypass for future Pro-class models.
+- Preserved an existing DeepSeek V4 Pro default during settings repair, included it in model lists and recommendations, and allowed explicit CLI and PaperRank synthesis selection.
+
+### Validation
+
+- Added regressions for Pi's direct, vendor-prefixed, and Fireworks DeepSeek V4 Pro IDs across catalog, recommendation, explicit-model, default-setting, and settings-normalization paths.
+
+## v0.3.14 - 2026-08-10
+
+### Web and document research
+
+- Updated `pi-web-access` to `0.20.0`. Researchers can use keyless DuckDuckGo HTML search as an explicit provider or fallback route.
+- Added optional Datalab PDF-to-Markdown extraction before Gemini and local PDF.js. Datalab retains tables, multi-column order, headings, links, and math, while the local parser remains the no-key fallback.
+- Fixed Gemini Web requests that failed when Google response headers exceeded the host agent's default HTTP/1.1 header limit.
+
+### Reliability
+
+- Preserved Feynman's project-local fetch cache, exact web configuration path, session model scope, browser-cookie opt-in, and bounded search deadline across the upstream upgrade.
+- Updated root and packaged runtime IP parsing to `10.5.0`, so IPv6 URL parsing fails gracefully for non-IPv6 hosts instead of throwing.
+- Restored automatic package reconciliation for workspaces that retained the `0.3.13` core package pins.
+
+### Validation
+
+- Verified the exact upstream `0.20.0` source through all `425` tests, typecheck, production audit, and package inspection. Added installed-runtime checks for DuckDuckGo and Datalab.
+
+## v0.3.13 - 2026-08-09
+
+### Reliability
+
+- Kept Pi agent-managed `brace-expansion` versions at or above the current secure `5.0.9` floor intact. A newer registry release can no longer stop Feynman during launch, while stale `5.0.6` through `5.0.8` trees still upgrade to the verified `5.0.9` package.
+- Kept malformed and older unsupported versions fail-closed instead of weakening the launch-time security repair.
+
+### Validation
+
+- Added source, package-lock, installed-tree, and exact agent-managed runtime regressions for future `brace-expansion` versions.
+
+## v0.3.12 - 2026-08-08
+
+### Research runtime
+
+- Updated the bundled Pi runtime to `0.84.1`. Provider authentication preflights, bounded blocked-tool termination, provider refresh transactions, and active-run reset protection now use Pi's current contracts.
+- Updated Workbench chat for Pi's delta-only RPC stream. Live assistant text now accumulates correctly while the final `message_end` remains authoritative.
 
 ### Document research
 
 - Updated `pi-docparser` to `4.0.0`. Native PDFium and OCR work now runs in isolated, cancellable child processes, so parser crashes and memory failures become bounded tool errors instead of terminating the research session.
 - Added strict page, worker, DPI, search, screenshot, and output limits. Parse publication is atomic, JSON output has a stable `{ pages, text }` shape, screenshots default to page 1, and each call accepts at most four explicit pages.
-- Removed the ImageMagick requirement for supported image inputs and updated LiteParse to `2.10.1`. Document parsing now requires Node.js `22.19.0` or newer; Feynman's supported Node floor already satisfies it.
+- Removed the ImageMagick requirement for supported image inputs and updated LiteParse to `2.11.1`. The document runtime now includes stronger table extraction, RTL/LTR text ordering, and source-provenance metadata support. Document parsing requires Node.js `22.19.0` or newer; Feynman's supported Node floor already satisfies it.
+- Added LiteParse's platform-native packages as optional npm dependencies, so one published Feynman tarball can parse documents on supported macOS, Linux, and Windows consumers.
 
 ### Web research
 
-- Updated `pi-web-access` to `0.18.0`. `fetch_content` can now return raw textual HTTP responses, answer a question against one page while retaining its source text, retrieve direct PNG/JPEG/WebP/GIF images, and paginate long content on cleaner boundaries.
-- Added exact, case-insensitive, and fuzzy passage lookup over stored page content through `findText` and `findMode`, plus current Kagi, Ollama Cloud, xAI, Bright Data, SerpBase, and authenticated SearXNG routes.
+- Updated `pi-web-access` to `0.19.0`. `fetch_content` can now return raw textual HTTP responses, answer a question against one page while retaining its source text, retrieve direct PNG/JPEG/WebP/GIF images, and paginate long content on cleaner boundaries.
+- Added exact, case-insensitive, and fuzzy passage lookup over stored page content through `findText` and `findMode`, plus current Jina Search, Kagi, Ollama Cloud, xAI, Bright Data, SerpBase, and authenticated SearXNG routes.
+- Adopted current Kagi Search and Extract contracts, Gemini relay routing for local video requests, xAI quota fallback classification, and `:max` scoped summary-model matching.
 - Preserved routed-provider model selection and hardened Git clone cancellation from upstream, including non-interactive credential handling and process-tree termination.
 
 ### Reliability
 
+- Fixed `feynman alpha ask` sending obsolete `urls`/`url` arguments to alphaXiv. Paper Q&A now sends the current `paper` plus `queries` schema.
 - Kept PDF scratch Markdown in the active project's `.feynman/cache/fetch-content`, kept browser-cookie access opt-in, retained the bounded primary search deadline, and adopted upstream's per-call curator isolation and no-browser timeout rather than carrying superseded local patches.
 - Bound page-answer, search-rewrite, and curator summary model selection to Pi's resolved session model scope, including `--models` overrides, instead of rereading an adjacent settings file.
+- Bound web-search configuration reads and writes to the same Feynman-managed path, including custom `FEYNMAN_WEB_SEARCH_CONFIG` locations, and create that file's parent before saving.
+- Updated Feynman's direct, nested Pi, and packaged runtime copies of Undici to `8.10.0` for current idle-connection, readable-body, retry, HTTP/2, proxy IPv6, and DNS-origin fixes.
+- Updated PDF.js to `6.2.108` and the website's audited JS-YAML and Nano ID trees to close current malicious-document and denial-of-service advisories.
 - Removed macOS ACL, file-flag, Apple metadata, and extended-attribute records from bundled runtime archives so those host records no longer change package bytes.
 - Updated audited Hono, `fast-uri`, `ip-address`, `express-rate-limit`, and website `brace-expansion` overrides after new registry advisories, and removed a streamed checksum-file handle from the Windows installer verifier.
 - Restored automatic package reconciliation for workspaces retaining the `0.3.11`, `0.3.10`, or older `0.3.6` bundled package defaults.
+
+### Validation
+
+- Added an installed document-tool gate that loads the shipped TypeScript extension through Pi's bundled Jiti, then executes `document_parse`, `document_search`, and `document_screenshot` against a generated PDF.
 
 ## v0.3.11 - 2026-08-01
 

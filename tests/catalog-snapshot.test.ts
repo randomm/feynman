@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildModelStatusSnapshotFromRecords } from "../src/model/catalog.js";
+import { buildModelStatusSnapshotFromRecords, isProClassModelSpec } from "../src/model/catalog.js";
 
 test("buildModelStatusSnapshotFromRecords returns empty guidance when model is set and valid", () => {
 	const snapshot = buildModelStatusSnapshotFromRecords(
@@ -37,7 +37,7 @@ test("buildModelStatusSnapshotFromRecords emits guidance when no default model i
 	assert.equal(snapshot.currentValid, false);
 	assert.equal(snapshot.current, undefined);
 	assert.ok(snapshot.guidance.some((line) => line.includes("No default research model")));
-	assert.ok(snapshot.guidance.some((line) => line.includes("feynman model set <provider/non-pro-model>")));
+	assert.ok(snapshot.guidance.some((line) => line.includes("feynman model set <provider/model>")));
 	assert.ok(snapshot.guidance.some((line) => line.includes("feynman model list")));
 	assert.ok(snapshot.guidance.every((line) => !line.includes("feynman setup model")));
 });
@@ -72,6 +72,43 @@ test("buildModelStatusSnapshotFromRecords excludes Pro-class provider and model 
 
 	assert.deepEqual(snapshot.availableModels, ["openai/gpt-5.5"]);
 	assert.equal(snapshot.recommended, "openai/gpt-5.5");
+});
+
+test("DeepSeek V4 Pro IDs remain available while genuine premium Pro models stay blocked", () => {
+	for (const spec of [
+		"deepseek/deepseek-v4-pro",
+		"baseten/deepseek-ai/DeepSeek-V4-Pro",
+		"fireworks/accounts/fireworks/models/deepseek-v4-pro",
+		"openrouter/deepseek/deepseek-v4-pro",
+	]) {
+		assert.equal(isProClassModelSpec(spec), false, spec);
+	}
+	assert.equal(isProClassModelSpec("google/gemini-3.1-pro"), true);
+	assert.equal(isProClassModelSpec("openai/o1-pro"), true);
+	assert.equal(isProClassModelSpec("vendor/not-deepseek-v4-pro"), true);
+	const previousBypass = process.env.FEYNMAN_ALLOW_PRO_MODELS;
+	try {
+		process.env.FEYNMAN_ALLOW_PRO_MODELS = "google/gemini-3.1-pro";
+		assert.equal(isProClassModelSpec("google/gemini-3.1-pro"), true);
+	} finally {
+		if (previousBypass === undefined) delete process.env.FEYNMAN_ALLOW_PRO_MODELS;
+		else process.env.FEYNMAN_ALLOW_PRO_MODELS = previousBypass;
+	}
+
+	const snapshot = buildModelStatusSnapshotFromRecords(
+		[
+			{ provider: "nebius", id: "deepseek-ai/DeepSeek-V4-Pro" },
+			{ provider: "google", id: "gemini-3.1-pro" },
+		],
+		[
+			{ provider: "nebius", id: "deepseek-ai/DeepSeek-V4-Pro" },
+			{ provider: "google", id: "gemini-3.1-pro" },
+		],
+		undefined,
+	);
+
+	assert.deepEqual(snapshot.availableModels, ["nebius/deepseek-ai/DeepSeek-V4-Pro"]);
+	assert.equal(snapshot.recommended, "nebius/deepseek-ai/DeepSeek-V4-Pro");
 });
 
 test("buildModelStatusSnapshotFromRecords marks provider as configured only when it has available models", () => {
@@ -194,23 +231,23 @@ test("buildModelStatusSnapshotFromRecords prefers the OpenCode Go default lineup
 		[
 			{ provider: "opencode-go", id: "glm-5" },
 			{ provider: "opencode-go", id: "glm-5.1" },
-			{ provider: "opencode-go", id: "kimi-k2.6" },
+			{ provider: "opencode-go", id: "kimi-k2.7-code" },
 			{ provider: "opencode-go", id: "minimax-m2.7" },
 		],
 		[
 			{ provider: "opencode-go", id: "glm-5" },
 			{ provider: "opencode-go", id: "glm-5.1" },
-			{ provider: "opencode-go", id: "kimi-k2.6" },
+			{ provider: "opencode-go", id: "kimi-k2.7-code" },
 			{ provider: "opencode-go", id: "minimax-m2.7" },
 		],
 		undefined,
 	);
 
-	assert.equal(snapshot.availableModels[0], "opencode-go/kimi-k2.6");
+	assert.equal(snapshot.availableModels[0], "opencode-go/kimi-k2.7-code");
 	assert.equal(snapshot.availableModels[1], "opencode-go/glm-5.1");
 	assert.equal(snapshot.availableModels[2], "opencode-go/minimax-m2.7");
 	assert.equal(snapshot.availableModels[3], "opencode-go/glm-5");
-	assert.equal(snapshot.recommended, "opencode-go/kimi-k2.6");
+	assert.equal(snapshot.recommended, "opencode-go/kimi-k2.7-code");
 });
 
 test("buildModelStatusSnapshotFromRecords sorts OpenCode providers with first-class providers", () => {

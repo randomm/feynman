@@ -1,10 +1,12 @@
 import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
 import { readFileSync, writeFileSync } from "node:fs";
 import { exec as execCallback } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import { readJson } from "../pi/settings.js";
-import { promptChoice, promptSelect, promptText, type PromptSelectOption } from "../setup/prompts.js";
+import { promptChoice, promptSecret, promptSelect, promptText, SetupCancelledError, validateApiKeyInput, type PromptSelectOption } from "../setup/prompts.js";
 import { openUrl } from "../system/open-url.js";
 import { printInfo, printSection, printSuccess, printWarning } from "../ui/terminal.js";
 import {
@@ -13,11 +15,12 @@ import {
 	getAuthenticatedModelRecords,
 	getAvailableModelRecords,
 	getSupportedModelRecords,
+	isProClassModelSpec,
 	type ModelStatusSnapshot,
 } from "./catalog.js";
 import { MODEL_API_KEY_PROVIDERS, type ApiKeyProviderInfo } from "./api-key-providers.js";
 import { createModelRegistry, createModelRuntime, getModelsJsonPath } from "./registry.js";
-import { upsertProviderBaseUrl, upsertProviderConfig } from "./models-json.js";
+import { apiKeyReference, upsertProviderBaseUrl, upsertProviderConfig } from "./models-json.js";
 
 const exec = promisify(execCallback);
 
@@ -224,7 +227,7 @@ async function resolveApiKeyConfig(apiKeyConfig: string): Promise<string | undef
 		}
 	}
 
-	const envValue = process.env[trimmed];
+	const envValue = process.env[trimmed.replace(/^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/, "$1")];
 	if (typeof envValue === "string" && envValue.trim()) {
 		return envValue.trim();
 	}
@@ -344,10 +347,10 @@ async function promptCustomProviderSetup(): Promise<CustomProviderSetup | undefi
 
 	printInfo("API key value supports:");
 	printInfo("  - literal secret (stored in models.json)");
-	printInfo("  - env var name (resolved at runtime)");
+	printInfo("  - env var name such as MY_API_KEY or $MY_API_KEY (resolved at runtime)");
 	printInfo("  - !command (executes and uses stdout)");
 	const apiKeyConfigRaw = (await promptText("API key / resolver", "")).trim();
-	const apiKeyConfig = apiKeyConfigRaw || "local";
+	const apiKeyConfig = apiKeyReference(apiKeyConfigRaw) || "local";
 	if (!apiKeyConfigRaw) {
 		printInfo("Using placeholder apiKey value (required by Pi for custom providers).");
 	}
@@ -434,7 +437,7 @@ async function promptLiteLlmProviderSetup(): Promise<CustomProviderSetup | undef
 	}
 
 	const hasKey = keySelection === 0;
-	const apiKeyConfig = hasKey ? "LITELLM_MASTER_KEY" : "local";
+	const apiKeyConfig = hasKey ? "$LITELLM_MASTER_KEY" : "local";
 	const authHeader = hasKey;
 	if (hasKey) {
 		printInfo("Set LITELLM_MASTER_KEY in your shell or .env before using Feynman.");
@@ -740,7 +743,7 @@ async function configureApiKeyProvider(authPath: string, providerId?: string): P
 		printInfo(`Tip: to avoid writing secrets to disk, set ${provider.envVar} in your shell or .env.`);
 	}
 
-	const apiKey = await promptText("Paste API key (leave empty to use env var instead)", "");
+	const apiKey = await promptSecret("Paste API key (leave empty to use env var instead)", undefined, validateApiKeyInput);
 	if (!apiKey) {
 		if (provider.envVar) {
 			printInfo(`Set ${provider.envVar} and rerun setup (or run \`feynman model list\`).`);
@@ -859,6 +862,29 @@ export async function authenticateModelProvider(authPath: string, settingsPath?:
 	return false;
 }
 
+// Sign in with ChatGPT sends a stable installation ID. Pi's own /login keeps it
+// as `deviceId` in the agent settings.json; share that one.
+export function getOrCreateDeviceId(authPath: string): string {
+	const settingsPath = resolve(dirname(authPath), "settings.json");
+	const settings = readJson(settingsPath);
+	if (typeof settings.deviceId === "string" && settings.deviceId) return settings.deviceId;
+	const deviceId = randomUUID();
+	writeFileSync(settingsPath, `${JSON.stringify({ ...settings, deviceId }, null, 2)}\n`, "utf8");
+	return deviceId;
+}
+
+// A provider answers invalid_grant when it rejects the authorization code, and
+// the browser comes back with no code when the sign-in was denied or lost a
+// redirect; a stale browser session usually causes both. Signing out there (or
+// using a private window) and retrying fixes it.
+export function describeOAuthLoginFailure(providerId: string, error: unknown): unknown {
+	if (!(error instanceof Error) || !/invalid_grant|Missing authorization code/.test(error.message)) return error;
+	const alternative = providerId === "openai" ? " Or sign in with `feynman model login openai-codex` instead." : "";
+	return new Error(
+		`${error.message}\nThe sign-in was rejected, usually because of a stale browser session. Sign out of the provider's site in your browser, or use a private window, then run \`feynman model login ${providerId}\` again.${alternative}`,
+	);
+}
+
 export async function loginModelProvider(authPath: string, providerId?: string, settingsPath?: string): Promise<boolean> {
 	if (providerId) {
 		const resolvedProvider = await resolveModelProviderForCommand(authPath, providerId);
@@ -900,7 +926,13 @@ export async function loginModelProvider(authPath: string, providerId?: string, 
 					prompt.signal,
 				);
 			}
-			return promptText(prompt.message, "", prompt.placeholder, prompt.signal);
+			if (prompt.type === "secret") {
+				return promptSecret(prompt.message, prompt.signal);
+			}
+			// An empty answer here fails the login with "Missing authorization code";
+			// keep asking, since the browser callback can still finish meanwhile.
+			const required = prompt.type === "manual_code" ? "Paste the redirect URL or code, or finish signing in in the browser." : undefined;
+			return promptText(prompt.message, "", prompt.placeholder, prompt.signal, required);
 		},
 		notify: (event: AuthEvent) => {
 			if (event.type === "auth_url") {
@@ -927,6 +959,8 @@ export async function loginModelProvider(authPath: string, providerId?: string, 
 			}
 		},
 		signal: abortController.signal,
+	}, { getDeviceId: () => getOrCreateDeviceId(authPath) }).catch((error: unknown) => {
+		throw describeOAuthLoginFailure(provider.id, error);
 	});
 
 	printSuccess(`Model provider login complete: ${provider.id}`);
@@ -967,10 +1001,35 @@ export async function logoutModelProvider(authPath: string, providerId?: string)
 	printSuccess(`Model provider logout complete: ${provider.id}`);
 }
 
+// Explains why `feynman model set <spec>` found no usable model.
+async function describeUnavailableModelSpec(authPath: string, spec: string): Promise<string> {
+	const input = spec.trim().replace(/^([^/:]+):(.+)$/, "$1/$2").toLowerCase();
+	const known = (await getSupportedModelRecords(authPath)).find(
+		(model) => `${model.provider}/${model.id}`.toLowerCase() === input || model.id.toLowerCase() === input,
+	);
+	if (known) {
+		const knownSpec = `${known.provider}/${known.id}`;
+		if (isProClassModelSpec(knownSpec)) {
+			return `Pro-class model disabled: ${knownSpec}. Choose an approved research model.`;
+		}
+		if (isLocalModelProvider(authPath, known.provider)) {
+			return `${knownSpec} has no API key. Pi only lists a local provider when it has one: add "apiKey": "local" to the ${known.provider} provider in ${getModelsJsonPath(authPath)}.`;
+		}
+		return `${knownSpec} has no credentials. Run \`feynman model login ${known.provider}\` first.`;
+	}
+	const modelId = input.slice(input.lastIndexOf("/") + 1);
+	const matches = (await getAvailableModelRecords(authPath))
+		.map((model) => `${model.provider}/${model.id}`)
+		.filter((candidate) => candidate.toLowerCase().includes(modelId))
+		.slice(0, 5);
+	const suggestion = matches.length > 0 ? ` Did you mean ${matches.join(", ")}?` : "";
+	return `Unknown model: ${spec}.${suggestion} Run \`feynman model list\` to see available models.`;
+}
+
 export async function setDefaultModelSpec(settingsPath: string, authPath: string, spec: string): Promise<void> {
 	const resolvedSpec = await resolveAvailableModelSpec(authPath, spec);
 	if (!resolvedSpec) {
-		throw new Error(`Model not available in Pi auth storage: ${spec}. Run \`feynman model list\` first.`);
+		throw new Error(await describeUnavailableModelSpec(authPath, spec));
 	}
 
 	const [provider, ...rest] = resolvedSpec.split("/");
@@ -979,7 +1038,28 @@ export async function setDefaultModelSpec(settingsPath: string, authPath: string
 	settings.defaultProvider = provider;
 	settings.defaultModel = modelId;
 	writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
-	printSuccess(`Non-Pro default model set to ${resolvedSpec}`);
+	printSuccess(`Research default model set to ${resolvedSpec}`);
+}
+
+export async function selectDefaultModel(settingsPath: string, authPath: string): Promise<void> {
+	const status = await collectModelStatus(settingsPath, authPath);
+	if (status.availableModels.length === 0) {
+		printWarning("No authenticated Pi models are currently available.");
+		for (const line of status.guidance) {
+			printInfo(line);
+		}
+		return;
+	}
+	const spec = await promptSelect(
+		"Choose the default research model:",
+		status.availableModels.map((value) => ({
+			value,
+			label: value,
+			hint: value === status.current ? "current" : value === status.recommended ? "recommended" : undefined,
+		})),
+		status.current ?? status.recommended,
+	);
+	await setDefaultModelSpec(settingsPath, authPath, spec);
 }
 
 export async function runModelSetup(settingsPath: string, authPath: string): Promise<void> {
@@ -992,21 +1072,18 @@ export async function runModelSetup(settingsPath: string, authPath: string): Pro
 			"Cancel",
 		];
 		const selection = await promptChoice("Choose how to configure model access:", choices, 0);
-		if (selection === 0) {
-			const loggedIn = await loginModelProvider(authPath, undefined, settingsPath);
-			if (!loggedIn) {
-				status = await collectModelStatus(settingsPath, authPath);
-				continue;
-			}
-		} else if (selection === 1) {
-			const configured = await configureApiKeyProvider(authPath);
-			if (!configured) {
-				status = await collectModelStatus(settingsPath, authPath);
-				continue;
-			}
-		} else {
-			printInfo("Setup cancelled.");
-			return;
+		if (selection === 2) throw new SetupCancelledError();
+		// Esc inside a provider list goes back to this menu instead of ending setup.
+		const done = await (selection === 0
+			? loginModelProvider(authPath, undefined, settingsPath)
+			: configureApiKeyProvider(authPath)
+		).catch((error: unknown) => {
+			if (error instanceof SetupCancelledError) return false;
+			throw error;
+		});
+		if (!done) {
+			status = await collectModelStatus(settingsPath, authPath);
+			continue;
 		}
 		status = await collectModelStatus(settingsPath, authPath);
 		if (status.availableModels.length === 0) {

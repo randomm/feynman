@@ -1,7 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { getFeynmanUpgradeLines, isNewerVersion } from "../src/system/self-update.js";
+import { fetchLatestFeynmanVersion, getFeynmanUpgradeLines, isNewerVersion } from "../src/system/self-update.js";
+
+test("release discovery requests the personal package registry", async (t) => {
+	const requests: unknown[] = [];
+	t.mock.method(globalThis, "fetch", async (url: unknown) => {
+		requests.push(url);
+		return new Response(JSON.stringify({ version: "0.3.48" }));
+	});
+	assert.equal(await fetchLatestFeynmanVersion(), "0.3.48");
+	assert.deepEqual(requests, ["https://registry.npmjs.org/@companion-ai/feynman/latest"]);
+});
 
 test("isNewerVersion compares release versions numerically", () => {
 	assert.equal(isNewerVersion("0.2.59", "0.2.58"), true);

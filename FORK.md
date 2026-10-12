@@ -14,10 +14,10 @@ Everything else should track upstream exactly.
 
 | | |
 |---|---|
-| Last synced | **2026-08-06** |
-| Upstream commit | `daa7f47` (`main`, package version `0.3.12`) |
-| Upstream tag line | v0.3.11 |
-| Previous sync | 2026-04-11 at `b3a82d4` (v0.2.17) — 180 commits of drift |
+| Last synced | **2026-10-12** |
+| Upstream commit | `6f1adbe` (`main`, package version `0.5.39`) |
+| Upstream tag line | v0.5.39 |
+| Previous sync | 2026-08-06 at `daa7f47` (v0.3.12) — 462 commits of drift |
 
 **Update this table on every sync.** It is the only record of where the fork sits.
 
@@ -103,19 +103,25 @@ git diff --name-status upstream/main HEAD    # or by hand
 |---|---|---|
 | `extensions/parallel-search/parallel.ts` | **LOW** | **New, fork-owned.** Exports `registerParallelTools(pi)`, registering `parallel_search`, `parallel_fetch`, `parallel_research`. Shells out to `parallel-cli` via `execFile` (no shell → no injection), always `--json`, 5-min timeout, 50 MB stdout cap. |
 | `tests/parallel-search.test.ts` | **LOW** | **New, fork-owned.** 13 unit tests over a mock `pi`. Runs as part of `npm test`. |
-| `tests/pro-class-allowlist.test.ts` | **LOW** | **New, fork-owned.** 6 tests guarding the `src/model/catalog.ts` patch below. This is the tripwire — see that row. |
-| `extensions/fork/current-date.ts` | **LOW** | **New, fork-owned.** Injects the real current date into every request. See below. |
-| `tests/current-date-context.test.ts` | **LOW** | **New, fork-owned.** 5 tests for the date injection. |
 | `scripts/fork/check-fork-delta.sh` | **LOW** | **New, fork-owned.** Post-sync verification. |
-| `extensions/research-tools.ts` | **MEDIUM** | **Two lines**: the `registerParallelTools` import and its call. Upstream adds registrations here often — it has merged cleanly so far because our lines sit in a stable alphabetical slot. |
-| `.feynman/agents/researcher.md` | **MEDIUM** | Frontmatter only: appends `parallel_search, parallel_fetch, parallel_research` to upstream's `tools:`, **plus a `subagentOnlyExtensions:` line** (see below). |
-| `.feynman/agents/verifier.md` | **MEDIUM** | Frontmatter only: appends `parallel_fetch` to upstream's `tools:`, **plus `subagentOnlyExtensions:`** (see below). |
-| `src/model/catalog.ts` | **HIGH** | **Pro-class allowlist** — one constant + one helper + a 4-line guard inside `isProClassModelSpec`. See below. |
+| `scripts/fork/gen-models-json.mjs` | **LOW** | **New, fork-owned.** Generates `~/.feynman/agent/models.json` for Nebius and Trail Openers. See below. |
+| `extensions/research-tools.ts` | **MEDIUM** | **One line**: the `registerParallelTools` import and its call. Upstream adds registrations here often — it has merged cleanly so far because our lines sit in a stable alphabetical slot. |
+| `.feynman/agents/researcher.md` | **MEDIUM** | Frontmatter only: appends `parallel_search, parallel_fetch, parallel_research` to upstream's `tools:`. |
+| `.feynman/agents/verifier.md` | **MEDIUM** | Frontmatter only: appends `parallel_fetch` to upstream's `tools:`. |
 | `FORK.md` | **LOW** | This file. Upstream has no counterpart. |
 
 Nothing else. In particular the fork does **not** touch `package.json`, `package-lock.json`,
-`.feynman/settings.json`, `.feynman/SYSTEM.md`, or `outputs/`. If a sync leaves a diff in any of
-those, it is accidental — revert it to upstream.
+`.feynman/settings.json`, `.feynman/SYSTEM.md`, `src/model/catalog.ts`, or `outputs/`. If a sync
+leaves a diff in any of those, it is accidental — revert it to upstream.
+
+### Current-date injection (RETIRED 2026-10-12 — upstream ships its own)
+
+Upstream added `extensions/research-tools/current-date.ts`, which injects the date into the system
+prompt via `before_agent_start`. Per the rule below, the fork's own injection was removed and its
+`extensions/fork/current-date.ts`, its test, and its wiring in `research-tools.ts` were dropped.
+Subagents still get the date because they load `research-tools.ts` as a whole.
+
+_Original rationale, kept for history:_
 
 ### Current-date injection — research correctness, not cosmetics
 
@@ -447,6 +453,24 @@ so the agents were *told* to prefer the parallel tools.
 upstream's prompt work on every sync, and it had already silently dropped upstream's newer
 `hf_*` tool guidance. Registering the tools and adding them to the frontmatter allowlist is
 enough for the agents to use them, at a fraction of the merge cost.
+
+### `subagentOnlyExtensions` in agent frontmatter — retired 2026-10-12
+
+Upstream now computes the child-session extension list itself (`feynmanSubagentExtensions` in
+`src/pi/settings.ts`), pointing at `extensions/research-tools.ts` with the correct install path.
+The fork's absolute-path frontmatter line was removed, along with `scripts/fork/check-fork-delta.sh`
+check 5 that enforced it. `research-tools.ts` still registers the `parallel_*` tools, so children
+still get them. Re-check if upstream ever stops wiring that file into children.
+
+### `src/model/catalog.ts` Pro-class allowlist — retired 2026-10-12
+
+Upstream fixed the same false positive with an exact-ID set (`NON_PREMIUM_PRO_MODEL_IDS`), which
+already covers `deepseek-ai/deepseek-v4-pro`. The fork's `FEYNMAN_ALLOW_PRO_MODELS` override was
+dropped because upstream's own test (`tests/catalog-snapshot.test.ts`) asserts that env override
+must **not** bypass the guard. That is a deliberate upstream choice, so the fork follows it. Model
+policy now means: add an entry to `NON_PREMIUM_PRO_MODEL_IDS` upstream, not in the fork.
+
+_Original patch, kept for history:_
 
 ### `npm:pi-subagents` removal — retired 2026-08-06
 

@@ -5,10 +5,12 @@ import {
 	lutimesSync,
 	mkdtempSync,
 	readdirSync,
+	renameSync,
 	rmSync,
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -128,8 +130,10 @@ export async function createDeterministicTarGz(rootPath, archivePath) {
 	normalizeArchiveTreeTimestamps(resolvedRoot);
 
 	const tempRoot = mkdtempSync(join(tmpdir(), "feynman-tar-"));
+	const outputTempRoot = mkdtempSync(join(dirname(resolvedArchive), ".feynman-tar-output-"));
 	const listPath = resolve(tempRoot, "entries.txt");
 	const tarPath = resolve(tempRoot, `${basename(resolvedArchive)}.tar`);
+	const completedArchivePath = resolve(outputTempRoot, basename(resolvedArchive));
 	writeEntryList(resolvedRoot, listPath);
 
 	try {
@@ -150,13 +154,19 @@ export async function createDeterministicTarGz(rootPath, archivePath) {
 				TZ: "UTC",
 			},
 		});
+		const output = createWriteStream(completedArchivePath, { mode: 0o644 });
 		await pipeline(
 			createReadStream(tarPath),
 			createGzip({ level: 9, mtime: 0 }),
-			createWriteStream(resolvedArchive, { mode: 0o644 }),
+			output,
 		);
+		if (!output.closed) {
+			await once(output, "close");
+		}
+		renameSync(completedArchivePath, resolvedArchive);
 	} finally {
 		rmSync(tempRoot, { recursive: true, force: true });
+		rmSync(outputTempRoot, { recursive: true, force: true });
 	}
 	return resolvedArchive;
 }

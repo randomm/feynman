@@ -1,9 +1,8 @@
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, globSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { verifyFileSha256 } from "./lib/runtime-workspace-integrity.mjs";
 import {
 	createDeterministicTarGz,
 	createDeterministicZip,
@@ -16,12 +15,12 @@ const packageLockPath = resolve(appRoot, "package-lock.json");
 const minBundledNodeVersion = packageJson.engines?.node?.match(/>=\s*([0-9]+\.[0-9]+\.[0-9]+)/)?.[1] || process.version.slice(1);
 const releaseNodeVersion = readFileSync(resolve(appRoot, ".nvmrc"), "utf8").trim().replace(/^v/, "");
 const PINNED_NODE_ARCHIVE_SHA256 = {
-	"node-v24.18.0-darwin-arm64.tar.xz": "4477b9f78efb77744cf5eb57a0e9594dba66466b38b4e93fa9f35cb907a095a6",
-	"node-v24.18.0-darwin-x64.tar.xz": "4a3b6bc81542154430825128d9a279e8b364e8d90581544e506ef7579fd1ab6f",
-	"node-v24.18.0-linux-arm64.tar.xz": "58c9520501f6ae2b52d5b210444e24b9d0c029a58c5011b797bc1fe7105886f6",
-	"node-v24.18.0-linux-x64.tar.xz": "55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742",
-	"node-v24.18.0-win-arm64.zip": "f274669adb93b1fd0fbf8f21fd078609e9dcc84333d4f2718d2dde3f9a161a01",
-	"node-v24.18.0-win-x64.zip": "0ae68406b42d7725661da979b1403ec9926da205c6770827f33aac9d8f26e821",
+	"node-v24.21.0-darwin-arm64.tar.xz": "6239d4cf92d864487ec8cd3615038f7b67e7f58b77b21cd2f09ea9fbd68065fe",
+	"node-v24.21.0-darwin-x64.tar.xz": "0ae5a24c24bb7d015cd816c5036b3f90f2945aa872fcf54e58da054753b3a299",
+	"node-v24.21.0-linux-arm64.tar.xz": "6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2",
+	"node-v24.21.0-linux-x64.tar.xz": "fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6",
+	"node-v24.21.0-win-arm64.zip": "8779b1bde1d39f8d420e3b57aa657b39891af434d3de44a919044cec06785921",
+	"node-v24.21.0-win-x64.zip": "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541",
 };
 
 function parseSemver(version) {
@@ -175,11 +174,6 @@ function nodeArchiveName(target) {
 	return `node-v${bundledNodeVersion}-${target.nodePlatform}-${target.nodeArch}.tar.xz`;
 }
 
-function ensureBundledWorkspace() {
-	logStep("preparing bundled runtime workspace...");
-	run(process.execPath, [resolve(appRoot, "scripts", "prepare-runtime-workspace.mjs")], { cwd: appRoot });
-}
-
 function copyPackageFiles(appDir) {
 	logStep("copying package files...");
 	const releaseDir = resolve(appRoot, "dist", "release");
@@ -199,7 +193,17 @@ function copyPackageFiles(appDir) {
 	cpSync(packageLockPath, resolve(appDir, "package-lock.json"));
 }
 
-function installAppDependencies(appDir, stagingRoot) {
+// Pi's npm-shrinkwrap makes npm install esbuild binaries for every platform
+// (~280 MB); a single-platform bundle keeps only its own.
+function pruneForeignEsbuildBinaries(depsDir, target) {
+	for (const scopeDir of globSync("**/node_modules/@esbuild", { cwd: depsDir })) {
+		for (const name of readdirSync(resolve(depsDir, scopeDir))) {
+			if (name !== target.id) rmSync(resolve(depsDir, scopeDir, name), { recursive: true, force: true });
+		}
+	}
+}
+
+function installAppDependencies(appDir, stagingRoot, target) {
 	logStep("installing production dependencies...");
 	const depsDir = resolve(stagingRoot, "prod-deps");
 	rmSync(depsDir, { recursive: true, force: true });
@@ -211,11 +215,11 @@ function installAppDependencies(appDir, stagingRoot) {
 	run("npm", ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel", "error"], {
 		cwd: depsDir,
 	});
-	run(process.execPath, [resolve(appRoot, "scripts", "prune-runtime-deps.mjs"), depsDir], {
-		cwd: appRoot,
-	});
+	pruneForeignEsbuildBinaries(depsDir, target);
 
-	cpSync(resolve(depsDir, "node_modules"), resolve(appDir, "node_modules"), { recursive: true });
+	// Keep npm's relative .bin links; cpSync otherwise rewrites them to absolute
+	// staging paths that dangle once the bundle is unpacked elsewhere.
+	cpSync(resolve(depsDir, "node_modules"), resolve(appDir, "node_modules"), { recursive: true, verbatimSymlinks: true });
 }
 
 function extractTarball(archivePath, destination, compressionFlag) {
@@ -280,6 +284,12 @@ function installBundledNode(bundleRoot, target, stagingRoot) {
 	renameSync(extractedDir, resolve(bundleRoot, "node"));
 }
 
+function resolveBundledNodeExecutable(bundleRoot, target) {
+	return target.launcher === "windows"
+		? resolve(bundleRoot, "node", "node.exe")
+		: resolve(bundleRoot, "node", "bin", "node");
+}
+
 function writeLauncher(bundleRoot, target) {
 	logStep("writing launchers...");
 	if (target.launcher === "unix") {
@@ -290,6 +300,8 @@ function writeLauncher(bundleRoot, target) {
 				"#!/bin/sh",
 				"set -eu",
 				'ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"',
+				'PATH="$ROOT/node/bin:$PATH"',
+				"export PATH",
 				'exec "$ROOT/node/bin/node" "$ROOT/app/bin/feynman.js" "$@"',
 				"",
 			].join("\n"),
@@ -306,6 +318,7 @@ function writeLauncher(bundleRoot, target) {
 			"setlocal",
 			'set "ROOT=%~dp0"',
 			'if "%ROOT:~-1%"=="\\" set "ROOT=%ROOT:~0,-1%"',
+			'set "PATH=%ROOT%\\node;%PATH%"',
 			'"%ROOT%\\node\\node.exe" "%ROOT%\\app\\bin\\feynman.js" %*',
 			"",
 		].join("\r\n"),
@@ -324,19 +337,7 @@ function writeLauncher(bundleRoot, target) {
 
 function validateBundle(bundleRoot, target) {
 	logStep("validating bundled native dependencies...");
-	const nodeExecutable =
-		target.launcher === "windows"
-			? resolve(bundleRoot, "node", "node.exe")
-			: resolve(bundleRoot, "node", "bin", "node");
-
-	const betterSqlitePackageJson = resolve(bundleRoot, "app", ".feynman", "npm", "node_modules", "better-sqlite3", "package.json");
-	if (!existsSync(betterSqlitePackageJson)) {
-		logStep("skipping better-sqlite3 validation; sqlite-backed packages are not bundled for this Node runtime");
-	} else {
-		run(nodeExecutable, ["-e", "require('./app/.feynman/npm/node_modules/better-sqlite3'); console.log('better-sqlite3 ok')"], {
-			cwd: bundleRoot,
-		});
-	}
+	const nodeExecutable = resolveBundledNodeExecutable(bundleRoot, target);
 
 	const launchers = target.launcher === "windows"
 		? [
@@ -372,6 +373,9 @@ function validateBundle(bundleRoot, target) {
 			fail(`native launcher returned empty help: ${launcher.command}`);
 		}
 	}
+	run(nodeExecutable, [resolve(appRoot, "scripts", "check-pi-rpc.mjs"), resolve(bundleRoot, "app", "bin", "feynman.js")], {
+		cwd: bundleRoot,
+	});
 }
 
 async function packBundle(bundleRoot, target, outDir) {
@@ -401,26 +405,11 @@ async function main() {
 		mkdirSync(outDir, { recursive: true });
 		mkdirSync(appDir, { recursive: true });
 
-		ensureBundledWorkspace();
 		copyPackageFiles(appDir);
-		installAppDependencies(appDir, stagingRoot);
-
-		const appFeynmanDir = resolve(appDir, ".feynman");
-		logStep("extracting runtime workspace...");
-		const runtimeArchivePath = resolve(appFeynmanDir, "runtime-workspace.tgz");
-		const runtimeArchiveDigestPath = resolve(appFeynmanDir, "runtime-workspace.sha256");
-		if (!verifyFileSha256(runtimeArchivePath, runtimeArchiveDigestPath)) {
-			fail("runtime workspace archive failed its SHA-256 integrity check");
-		}
-		extractTarball(runtimeArchivePath, appFeynmanDir, "-xzf");
-		logStep("patching embedded Pi runtime...");
-		run(process.execPath, [resolve(appDir, "scripts", "patch-embedded-pi.mjs")], { cwd: appDir });
-		run(process.execPath, [resolve(appDir, "scripts", "verify-package-artifact.mjs"), appDir], { cwd: appDir });
-		run("npm", ["audit", "--omit=dev", "--no-fund"], { cwd: appDir });
-		rmSync(runtimeArchivePath, { force: true });
-		rmSync(runtimeArchiveDigestPath, { force: true });
-
+		installAppDependencies(appDir, stagingRoot, target);
 		installBundledNode(bundleRoot, target, stagingRoot);
+		run(process.execPath, [resolve(appRoot, "scripts", "npm-audit.mjs")], { cwd: appDir });
+
 		writeLauncher(bundleRoot, target);
 		validateBundle(bundleRoot, target);
 
@@ -431,4 +420,6 @@ async function main() {
 	}
 }
 
-await main();
+if (process.argv[1] && resolve(process.argv[1]) === import.meta.filename) {
+	await main();
+}

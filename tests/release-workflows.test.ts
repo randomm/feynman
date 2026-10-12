@@ -5,23 +5,23 @@ import test from "node:test";
 const e2eWorkflow = readFileSync(".github/workflows/e2e.yml", "utf8");
 const publishWorkflow = readFileSync(".github/workflows/publish.yml", "utf8");
 const packageManifest = JSON.parse(readFileSync("package.json", "utf8")) as {
-	bundleDependencies?: string[];
+	files?: string[];
 };
 
 test("pull-request release gates validate the merge candidate", () => {
 	assert.match(e2eWorkflow, /pull_request:\s*\n\s+branches: \[main\]/);
+	assert.match(e2eWorkflow, /\npermissions:\s*\n\s+contents: read\s*\n/);
 	assert.doesNotMatch(e2eWorkflow, /github\.event\.pull_request\.head\.sha/);
 	assert.match(e2eWorkflow, /name: Release candidate \(PR\)/);
 	assert.match(e2eWorkflow, /name: Candidate consumer \(\$\{\{ matrix\.os \}\}, Node \$\{\{ matrix\.node \}\}\)/);
 	assert.match(e2eWorkflow, /name: pr-npm-package/);
 	assert.match(e2eWorkflow, /node: "22\.22\.0"/);
-	assert.match(e2eWorkflow, /node: "25"/);
+	assert.match(e2eWorkflow, /node: "26"/);
 	assert.match(e2eWorkflow, /name: Windows native installer \(PR\)/);
 	assert.match(e2eWorkflow, /shell: powershell/);
 	assert.match(e2eWorkflow, /shell: pwsh/);
 	assert.match(e2eWorkflow, /tarball_for_tar=\$\(cygpath -u "\$tarball"\)/);
 	assert.match(e2eWorkflow, /consumer=\$\(cygpath -u "\$consumer"\)/);
-	assert.match(e2eWorkflow, /runtime_archive=\$\(cygpath -u "\$runtime_archive"\)/);
 	assert.equal(
 		(e2eWorkflow.match(/scripts\/verify-windows-installer\.ps1/g) ?? []).length,
 		2,
@@ -38,7 +38,7 @@ test("manual post-release gates exercise the live native installers", () => {
 	assert.match(installerJob[0], /https:\/\/feynman\.is\/install\.ps1/);
 	assert.match(installerJob[0], /FEYNMAN_INSTALL_BIN_DIR/);
 	assert.match(installerJob[0], /shell: powershell/);
-	assert.match(installerJob[0], /verify-installed-runtime\.mjs/);
+	assert.match(installerJob[0], /check-pi-rpc\.mjs/);
 	for (const os of ["ubuntu-latest", "macos-14", "windows-latest"]) {
 		assert.match(installerJob[0], new RegExp(`- ${os}`));
 	}
@@ -46,52 +46,28 @@ test("manual post-release gates exercise the live native installers", () => {
 
 test("PR and publish workflows require clean package and consumer audits", () => {
 	for (const workflow of [e2eWorkflow, publishWorkflow]) {
-		assert.match(workflow, /npm audit --omit=dev --prefix \.feynman\/npm/);
-		assert.match(workflow, /npm audit --omit=dev --prefix "\$consumer"/);
-		assert.match(workflow, /\.feynman\/runtime-workspace\.tgz/);
-		assert.match(workflow, /npm audit --omit=dev --prefix "\$runtime_audit\/npm"/);
-		assert.doesNotMatch(
-			workflow,
-			/npm audit --omit=dev --prefix\s+\\?\s*"\$consumer\/node_modules\/@companion-ai\/feynman\/\.feynman\/npm"/,
-		);
+		assert.match(workflow, /node scripts\/npm-audit\.mjs --prefix "\$consumer"/);
 		assert.match(workflow, /npm pack --dry-run --json/);
-		assert.match(workflow, /verify-package-artifact\.mjs/);
 		assert.match(workflow, /verify-package-budget\.mjs/);
 		assert.match(workflow, /git status --porcelain --untracked-files=all/);
 	}
 });
 
-test("package and native release gates exercise persisted Pi user-package upgrades", () => {
-	const staleUpgradeVerifier = /node scripts\/verify-stale-pi-upgrade\.mjs/g;
-	assert.equal((e2eWorkflow.match(staleUpgradeVerifier) ?? []).length, 1);
-	assert.equal((publishWorkflow.match(staleUpgradeVerifier) ?? []).length, 3);
-});
-
-test("installed package gates verify Feynman commands, tools, and TypeBox schemas across launchers", () => {
-	const installedRuntimeVerifier = /scripts\/verify-installed-runtime\.mjs/g;
-	assert.equal((e2eWorkflow.match(installedRuntimeVerifier) ?? []).length, 5);
-	assert.equal((publishWorkflow.match(installedRuntimeVerifier) ?? []).length, 8);
+test("installed package and native gates boot the shipped CLI in Pi RPC mode", () => {
+	assert.ok(packageManifest.files?.includes("scripts/check-pi-rpc.mjs"), "package files must include the RPC compatibility check");
+	const rpcCheck = /scripts[\\/]check-pi-rpc\.mjs/g;
+	assert.equal((e2eWorkflow.match(rpcCheck) ?? []).length, 7);
+	assert.equal((publishWorkflow.match(rpcCheck) ?? []).length, 8);
 	for (const workflow of [e2eWorkflow, publishWorkflow]) {
 		assert.match(workflow, /bin="\$consumer\/node_modules\/\.bin\/feynman\.cmd"/);
-		assert.match(
-			workflow,
-			/global_node_modules\/@companion-ai\/feynman\/scripts\/verify-installed-runtime\.mjs" "\$global_bin"/,
-		);
+		assert.match(workflow, /node "\$global_node_modules\/@companion-ai\/feynman\/scripts\/check-pi-rpc\.mjs"/);
 		assert.match(workflow, /global_node_modules=\$\(npm root --global --prefix "\$global_prefix"\)/);
 	}
-	assert.match(e2eWorkflow, /& \$nativeNode \$nativeVerifier \$native/);
-	assert.match(publishWorkflow, /"\$bundle\/node\/bin\/node" "\$bundle\/app\/scripts\/verify-installed-runtime\.mjs"/);
-	assert.match(
-		publishWorkflow,
-		/"\$native_bundle_root\/node\/bin\/node"\s+\\\n\s+"\$native_bundle_root\/app\/scripts\/verify-installed-runtime\.mjs"/,
-	);
+	assert.match(publishWorkflow, /"\$bundle\/node\/bin\/node" "\$bundle\/app\/scripts\/check-pi-rpc\.mjs"/);
+	assert.match(publishWorkflow, /"\$native_bundle_root\/node\/bin\/node" "\$native_bundle_root\/app\/scripts\/check-pi-rpc\.mjs"/);
 });
 
 test("package gates exercise the global npm install path", () => {
-	assert.ok(
-		packageManifest.bundleDependencies?.includes("@opentelemetry/api"),
-		"the direct telemetry API must be bundled so npm global installs cannot leave an empty hoist target",
-	);
 	assert.equal(
 		(e2eWorkflow.match(/npm install --global --prefix "\$global_prefix"/g) ?? []).length,
 		1,
@@ -110,22 +86,25 @@ test("package gates exercise the global npm install path", () => {
 	assert.match(publishWorkflow, /"@companion-ai\/feynman@\$VERSION"/);
 });
 
-test("package consumer matrices allow bounded Windows global-install time", () => {
+test("package consumer matrices allow two slow Windows package installs", () => {
 	const candidateConsumerJob = e2eWorkflow.match(
 		/\n  supported-node-consumers-pr:[\s\S]*?(?=\n  windows-native-installer-pr:)/,
 	);
 	assert.ok(candidateConsumerJob, "PR workflow must define the candidate consumer job");
-	assert.match(candidateConsumerJob[0], /\n    timeout-minutes: 60\n/);
+	assert.match(candidateConsumerJob[0], /\n    timeout-minutes: 90\n/);
 
 	const releaseConsumerJob = publishWorkflow.match(
 		/\n  verify-package-consumers:[\s\S]*?(?=\n  publish-npm:)/,
 	);
 	assert.ok(releaseConsumerJob, "publish workflow must define the package consumer job");
-	assert.match(releaseConsumerJob[0], /\n    timeout-minutes: 60\n/);
+	assert.match(releaseConsumerJob[0], /\n    timeout-minutes: 90\n/);
 });
 
 test("publish uses the exact verified tarball after native bundles pass", () => {
-	assert.match(publishWorkflow, /concurrency:\s*\n\s+group: publish-/);
+	assert.match(publishWorkflow, /\nconcurrency:\s*\n\s+group: publish-\$\{\{ github\.repository \}\}-\$\{\{ github\.ref \}\}-\$\{\{ github\.event_name \}\}\n\s+cancel-in-progress: false/);
+	const releaseGithubJob = publishWorkflow.match(/\n  release-github:[\s\S]*?(?=\n  verify-published-state:)/);
+	assert.ok(releaseGithubJob, "publish workflow must define the GitHub release job");
+	assert.match(releaseGithubJob[0], /concurrency:\s*\n\s+group: release-github-\$\{\{ github\.repository \}\}\n\s+cancel-in-progress: false/);
 	assert.match(publishWorkflow, /workflow_dispatch:/);
 	assert.match(publishWorkflow, /name: npm-package/);
 	assert.match(publishWorkflow, /name: npm-package\s*\n\s+path: npm-package/);
@@ -147,7 +126,7 @@ test("publish uses the exact verified tarball after native bundles pass", () => 
 		publishNpmJob[0],
 		/tarball=\$\(node -e 'process\.stdout\.write\(require\("node:path"\)\.resolve\(process\.argv\[1\]\)\)' "\$tarball"\)/,
 	);
-	assert.match(publishNpmJob[0], /npx npm@11\.18\.0 publish "\$tarball" --access public --provenance/);
+	assert.match(publishNpmJob[0], /npx npm@12\.0\.2 publish "\$tarball" --access public --provenance/);
 	assert.match(publishNpmJob[0], /github\.event_name == 'push'/);
 	assert.match(
 		publishWorkflow,
@@ -165,19 +144,14 @@ test("publish uses the exact verified tarball after native bundles pass", () => 
 	for (const os of ["ubuntu-latest", "macos-14", "windows-latest"]) {
 		assert.match(publishWorkflow, new RegExp(`- os: ${os}`));
 	}
-	for (const nodeVersion of ["22.22.0", "24.18.0", "25"]) {
+	for (const nodeVersion of ["22.22.0", "24.21.0", "26"]) {
 		assert.match(publishWorkflow, new RegExp(`node: "${nodeVersion.replace(/\./g, "\\.")}"`));
 	}
 	const consumerJob = publishWorkflow.match(
 		/\n  verify-package-consumers:[\s\S]*?(?=\n  publish-npm:)/,
 	);
 	assert.ok(consumerJob, "publish workflow must define the package consumer job");
-	assert.match(
-		consumerJob[0],
-		/runtime_archive="\$consumer\/node_modules\/@companion-ai\/feynman\/\.feynman\/runtime-workspace\.tgz"/,
-	);
-	assert.match(consumerJob[0], /runtime_archive=\$\(cygpath -u "\$runtime_archive"\)/);
-	assert.match(consumerJob[0], /runtime_audit=\$\(cygpath -u "\$runtime_audit"\)/);
+	assert.match(consumerJob[0], /consumer=\$\(cygpath -u "\$consumer"\)/);
 	assert.match(publishWorkflow, /needs\.build-native-bundles\.result == 'success'/);
 	assert.match(publishWorkflow, /needs\.verify-package-consumers\.result == 'success'/);
 	assert.match(publishWorkflow, /dist\.integrity/);
@@ -190,6 +164,44 @@ test("publish uses the exact verified tarball after native bundles pass", () => 
 		publishWorkflow,
 		/if \[ "\$\{\{ needs\.version-check\.outputs\.should_publish_npm \}\}" = "true" \]/,
 	);
+});
+
+test("all three provenance verifier calls pin immutable IDs from trusted GitHub context", () => {
+	const calls = [...publishWorkflow.matchAll(/node scripts\/verify-npm-provenance\.mjs \\\n[\s\S]*?\)/g)];
+	assert.equal(calls.length, 3);
+	for (const [call] of calls) {
+		assert.match(call,
+			/"refs\/heads\/main" \\\n\s+'\$\{\{ github\.repository_owner_id \}\}' \\\n\s+'\$\{\{ github\.repository_id \}\}'\)$/);
+		assert.match(call, /"https:\/\/github\.com\/\$GITHUB_REPOSITORY"/);
+		assert.match(call, /"\.github\/workflows\/publish\.yml"/);
+	}
+	assert.equal((publishWorkflow.match(/audit signatures --json --include-attestations/g) ?? []).length, 3);
+});
+
+test("npm 12 is pinned only for compatible publisher and signature-audit jobs", () => {
+	// npm 12.0.2: ^22.22.2 || ^24.15.0 || >=26.0.0. In particular, not Node 25.
+	const [major, minor, patch] = readFileSync(".nvmrc", "utf8").trim().replace(/^v/, "").split(".").map(Number);
+	assert.ok(
+		(major === 22 && (minor > 22 || (minor === 22 && patch >= 2))) ||
+			(major === 24 && minor >= 15) || major >= 26,
+		"Publisher .nvmrc must satisfy npm 12.0.2 engines",
+	);
+	assert.equal((publishWorkflow.match(/npx(?: --yes)? npm@12\.0\.2 /g) ?? []).length, 4);
+	assert.equal((publishWorkflow.match(/npx --yes npm@12\.0\.2 audit signatures --json --include-attestations/g) ?? []).length, 3);
+	for (const id of ["version-check", "publish-npm", "verify-published-state"]) {
+		const job = publishWorkflow.match(new RegExp(`\\n  ${id}:[\\s\\S]*?(?=\\n  [a-z][a-z-]*:|$)`))?.[0];
+		assert.ok(job, `missing ${id} job`);
+		assert.match(job, /node-version-file: \.nvmrc/);
+		assert.match(job, /npm@12\.0\.2/);
+		assert.doesNotMatch(job, /node-version: \$\{\{ matrix\.node \}\}/);
+	}
+	const consumer = publishWorkflow.match(/\n  verify-package-consumers:[\s\S]*?(?=\n  publish-npm:)/)?.[0];
+	assert.ok(consumer);
+	assert.match(consumer, /node: "26"/);
+	assert.doesNotMatch(consumer, /npm@12|npm install.*--global.*npm@/);
+	assert.doesNotMatch(e2eWorkflow, /npm@12/);
+	assert.doesNotMatch(publishWorkflow, /npm@11\.18\.0|npm@latest/);
+	assert.match(publishWorkflow, /npx npm@12\.0\.2 publish "\$tarball" --access public --provenance/);
 });
 
 test("GitHub release waits for verification, native bundles, and npm publication", () => {
@@ -233,7 +245,14 @@ test("version reconciliation and post-publish verification cover all release sur
 		/needs\.version-check\.outputs\.should_publish_npm == 'false' \|\|\s+needs\.publish-npm\.result == 'success'/,
 	);
 	assert.match(publishWorkflow, /gh release download "v\$VERSION"/);
-	assert.match(publishWorkflow, /npm install --prefix "\$consumer".*"@companion-ai\/feynman@\$VERSION"/);
+	assert.match(
+		publishWorkflow,
+		/npm install --prefix "\$consumer" --omit=dev --no-audit \\\s+"@companion-ai\/feynman@\$VERSION"/,
+	);
+	assert.match(verifyPublishedJob[0], /npm_install_error="\$RUNNER_TEMP\/npm-install-published\.err"/);
+	assert.match(verifyPublishedJob[0], /if ! grep -q 'E404' "\$npm_install_error"/);
+	assert.match(verifyPublishedJob[0], /npm tarball did not become installable/);
+	assert.match(verifyPublishedJob[0], /rm -rf "\$consumer\/node_modules" "\$consumer\/package-lock\.json"/);
 	assert.match(publishWorkflow, /unzip -t/);
 	assert.match(publishWorkflow, /targetCommitish/);
 	assert.match(publishWorkflow, /asset\.digest/);
@@ -252,8 +271,13 @@ test("version reconciliation and post-publish verification cover all release sur
 		/npm view "@companion-ai\/feynman@\$VERSION" version 2>\/dev\/null \|\| true/,
 	);
 	assert.match(publishWorkflow, /node-version-file: \.nvmrc/);
-	assert.match(publishWorkflow, /npx npm@11\.18\.0 publish/);
+	assert.match(publishWorkflow, /npx npm@12\.0\.2 publish/);
 	assert.match(publishWorkflow, /Windows native launcher failed --help/);
+	assert.match(
+		publishWorkflow,
+		/\[System\.IO\.Compression\.ZipFile\]::ExtractToDirectory/,
+	);
+	assert.doesNotMatch(publishWorkflow, /Expand-Archive/);
 	assert.doesNotMatch(publishWorkflow, /npm@latest/);
 	for (const workflow of [e2eWorkflow, publishWorkflow]) {
 		assert.doesNotMatch(workflow, /uses: actions\/[^@\s]+@v\d/);

@@ -1,21 +1,19 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { registerAlphaTools } from "./research-tools/alpha.js";
-import { registerChemistrySketcherTool } from "./research-tools/chemistry-sketcher.js";
+import { registerCurrentDateResearchContext } from "./research-tools/current-date.js";
 import { registerDiscoveryCommands } from "./research-tools/discovery.js";
-import { registerFeynmanModelCommand } from "./research-tools/feynman-model.js";
+import { registerDocxFallback } from "./research-tools/docx-fallback.js";
 import { installFeynmanHeader } from "./research-tools/header.js";
 import { registerHelpCommand } from "./research-tools/help.js";
 import { registerHuggingFaceTools } from "./research-tools/huggingface.js";
+import { registerLaunchNotice } from "./research-tools/launch-notice.js";
+import { registerModelErrorHint } from "./research-tools/model-error-hint.js";
 import { registerInitCommand, registerOutputsCommand } from "./research-tools/project.js";
-import { registerCurrentDateContext } from "./fork/current-date.js";
 import { registerParallelTools } from "./parallel-search/parallel.js";
 import { registerServiceTierControls } from "./research-tools/service-tier.js";
 import { registerScienceDatabaseTools } from "./research-tools/science-databases.js";
-import { registerModelEndpointTools } from "./research-tools/model-endpoints.js";
-import { registerThinkingCommand } from "./research-tools/thinking.js";
-import { registerWorkbenchConnectorTools } from "./research-tools/workbench-connectors.js";
-import { registerWorkbenchContextTool } from "./research-tools/workbench-context.js";
+import { registerResearchTelemetry } from "./research-tools/telemetry.js";
 
 export default function researchTools(pi: ExtensionAPI): void {
 	const cache: { agentSummaryPromise?: Promise<{ agents: string[]; chains: string[] }> } = {};
@@ -26,19 +24,17 @@ export default function researchTools(pi: ExtensionAPI): void {
 	});
 
 	registerAlphaTools(pi);
-	registerChemistrySketcherTool(pi);
+	registerCurrentDateResearchContext(pi);
 	registerHuggingFaceTools(pi);
 	registerDiscoveryCommands(pi);
-	registerFeynmanModelCommand(pi);
+	registerDocxFallback(pi);
 	registerHelpCommand(pi);
 	registerInitCommand(pi);
+	registerLaunchNotice(pi);
+	registerModelErrorHint(pi);
 	registerOutputsCommand(pi);
-	registerCurrentDateContext(pi);
 	registerParallelTools(pi);
 	registerServiceTierControls(pi);
 	registerScienceDatabaseTools(pi);
-	registerModelEndpointTools(pi);
-	registerThinkingCommand(pi);
-	registerWorkbenchConnectorTools(pi);
-	registerWorkbenchContextTool(pi);
+	registerResearchTelemetry(pi);
 }

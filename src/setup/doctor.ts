@@ -1,11 +1,14 @@
 import { getUserName as getAlphaUserName, isLoggedIn as isAlphaLoggedIn } from "@companion-ai/alpha-hub/lib";
+import { getValidToken as getValidAlphaToken } from "@companion-ai/alpha-hub/lib/auth";
 
 import { readFileSync } from "node:fs";
 
+import { verifyAlphaAuthStatus } from "../alpha-auth-status.js";
 import { formatPiWebAccessDoctorLines, getPiWebAccessStatus } from "../pi/web-access.js";
 import { BROWSER_FALLBACK_PATHS, PANDOC_FALLBACK_PATHS, resolveExecutable } from "../system/executables.js";
 import { readJson } from "../pi/settings.js";
-import { validatePiInstallation } from "../pi/runtime.js";
+import { findWindowsBash, validatePiInstallation, WINDOWS_BASH_MISSING_NOTICE } from "../pi/runtime.js";
+import { isTelemetryDisabled } from "../telemetry/posthog.js";
 import { printInfo, printPanel, printSection } from "../ui/terminal.js";
 import { getCurrentModelSpec } from "../model/commands.js";
 import { buildModelStatusSnapshotFromRecords, getAvailableModelRecords, getSupportedModelRecords } from "../model/catalog.js";
@@ -110,6 +113,7 @@ export async function runStatus(options: DoctorOptions): Promise<void> {
 	printInfo(`Web access: pi-web-access (${snapshot.webRouteLabel})`);
 	printInfo(`Service tier: ${getConfiguredServiceTier(options.settingsPath) ?? "not set"}`);
 	printInfo(`Preview: ${snapshot.previewConfigured ? "configured" : "not configured"}`);
+	printInfo(`Telemetry: ${isTelemetryDisabled() ? "off" : "on (anonymous usage metadata; set FEYNMAN_TELEMETRY=off to disable)"}`);
 
 	printSection("Paths");
 	printInfo(`Sessions: ${snapshot.sessionDir}`);
@@ -146,12 +150,20 @@ export async function runDoctor(options: DoctorOptions): Promise<void> {
 	console.log(`working dir: ${options.workingDir}`);
 	console.log(`session dir: ${options.sessionDir}`);
 	console.log("");
-	console.log(`alphaXiv auth: ${isAlphaLoggedIn() ? "ok" : "missing"}`);
-	if (isAlphaLoggedIn()) {
-		const name = getAlphaUserName();
+	// Same online check as `feynman alpha status`: a stored token can be expired.
+	const alphaStatus = await verifyAlphaAuthStatus({ getValidToken: getValidAlphaToken }).catch(
+		(error: unknown) => ({ authenticated: false, error: error instanceof Error ? error.message : String(error) }),
+	);
+	if (alphaStatus.authenticated) {
+		console.log("alphaXiv auth: ok");
+		const name = ("name" in alphaStatus ? alphaStatus.name : undefined) ?? getAlphaUserName();
 		if (name) {
 			console.log(`  user: ${name}`);
 		}
+	} else if ("error" in alphaStatus) {
+		console.log(`alphaXiv auth: unverified (${alphaStatus.error})`);
+	} else {
+		console.log(`alphaXiv auth: ${isAlphaLoggedIn() ? "expired, run feynman alpha login" : "missing"}`);
 	}
 	console.log(`supported models: ${supportedModels.length}`);
 	if (modelStatus.availableModels.length > 0) {
@@ -189,11 +201,15 @@ export async function runDoctor(options: DoctorOptions): Promise<void> {
 		}
 	}
 	console.log(`pandoc: ${pandocPath ?? "missing"}`);
+	if (process.platform === "win32") {
+		const shellPath = settings.shellPath;
+		console.log(`bash: ${typeof shellPath === "string" ? `${shellPath} (shellPath)` : findWindowsBash()?.path ?? `missing. ${WINDOWS_BASH_MISSING_NOTICE}`}`);
+	}
 	console.log(`browser preview runtime: ${browserPath ?? "missing"}`);
 	for (const line of formatPiWebAccessDoctorLines()) {
 		console.log(line);
 	}
-	console.log(`quiet startup: ${settings.quietStartup === true ? "enabled" : "disabled"}`);
+	console.log(`quiet startup: ${settings.quietStartup === "header" ? "header only" : settings.quietStartup === true ? "enabled" : "disabled"}`);
 	console.log(`theme: ${typeof settings.theme === "string" ? settings.theme : "not set"}`);
 	if (missingPiBits.length > 0) {
 		console.log("pi runtime: missing files");

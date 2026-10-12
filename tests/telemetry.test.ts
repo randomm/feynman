@@ -1,35 +1,38 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { gunzipSync } from "node:zlib";
 
 import {
 	DEFAULT_POSTHOG_HOST,
 	DEFAULT_POSTHOG_PROJECT_ID,
 	DEFAULT_POSTHOG_PROJECT_TOKEN,
-	buildPostHogOtelEnv,
-	clearPostHogOtelEnv,
+	TELEMETRY_NOTICE,
+	captureTelemetryException,
 	captureTelemetryEventImmediate,
 	createTelemetryCircuitBreakerFetch,
-	createOneShotOtlpTransport,
-	createTelemetryTransportCircuitBreaker,
 	getCliTelemetryMetadata,
-	getPostHogOtelEnv,
+	getPostHogChildEnv,
 	initializePostHogTelemetry,
 	normalizeTelemetryProperties,
+	redactTelemetryText,
 	resolvePostHogTelemetryConfig,
-	sanitizeTelemetryException,
 	shutdownPostHogTelemetry,
 	telemetryErrorProperties,
+	telemetryFirstRunNotice,
 } from "../src/telemetry/posthog.js";
+
+
+// tests/isolate-tmpdir.ts turns telemetry off for spawned CLIs; these tests stub the network.
+delete process.env.FEYNMAN_TELEMETRY;
 
 test("resolvePostHogTelemetryConfig defaults to the Feynman PostHog project", () => {
 	const home = mkdtempSync(join(tmpdir(), "feynman-telemetry-home-"));
 	const config = resolvePostHogTelemetryConfig({
 		home,
 		appVersion: "0.3.4",
-		serviceName: "feynman-test",
 		env: {
 			FEYNMAN_TELEMETRY: "1",
 		},
@@ -39,7 +42,6 @@ test("resolvePostHogTelemetryConfig defaults to the Feynman PostHog project", ()
 	assert.equal(config?.projectId, DEFAULT_POSTHOG_PROJECT_ID);
 	assert.equal(config?.projectToken, DEFAULT_POSTHOG_PROJECT_TOKEN);
 	assert.equal(config?.appVersion, "0.3.4");
-	assert.equal(config?.serviceName, "feynman-test");
 	assert.match(config?.distinctId ?? "", /^feynman_/);
 
 	const state = JSON.parse(readFileSync(join(home, ".state", "telemetry.json"), "utf8")) as { anonymousId?: string };
@@ -51,65 +53,67 @@ test("resolvePostHogTelemetryConfig respects telemetry opt out", () => {
 	assert.equal(resolvePostHogTelemetryConfig({ env: { DO_NOT_TRACK: "1" } }), undefined);
 });
 
-test("buildPostHogOtelEnv points traces and logs at PostHog with the project token", () => {
-	const env = buildPostHogOtelEnv(
-		{
-			host: "https://us.i.posthog.com",
-			projectId: "123",
-			projectToken: "phc_test",
-		},
-		"feynman-pi",
-	);
+test("first-run notice says what is sent and how to opt out, once per Feynman home", async () => {
+	const home = mkdtempSync(join(tmpdir(), "feynman-telemetry-notice-home-"));
+	const previous = { FEYNMAN_TELEMETRY: process.env.FEYNMAN_TELEMETRY, DO_NOT_TRACK: process.env.DO_NOT_TRACK };
+	delete process.env.FEYNMAN_TELEMETRY;
+	delete process.env.DO_NOT_TRACK;
+	try {
+		assert.match(TELEMETRY_NOTICE, /anonymous usage telemetry/);
+		assert.match(TELEMETRY_NOTICE, /stack trace, with your home folder shown as ~/);
+		assert.match(TELEMETRY_NOTICE, /never sends prompts, model output, paper content, or tool arguments/);
+		assert.match(TELEMETRY_NOTICE, /FEYNMAN_TELEMETRY=off/);
 
-	assert.equal(env.FEYNMAN_POSTHOG_HOST, "https://us.i.posthog.com");
-	assert.equal(env.FEYNMAN_POSTHOG_KEY, "phc_test");
-	assert.equal(env.FEYNMAN_POSTHOG_PROJECT_ID, "123");
-	assert.equal(env.PI_OTEL_CAPTURE_CONTENT, "metadata_only");
-	assert.equal(env.PI_OTEL_LOGS, "0");
-	assert.equal(env.PI_OTEL_METRICS, "0");
-	assert.equal(env.OTEL_SERVICE_NAME, "feynman-pi");
-	assert.equal(env.OTEL_EXPORTER_OTLP_ENDPOINT, undefined);
-	assert.equal(env.OTEL_EXPORTER_OTLP_HEADERS, undefined);
-	assert.equal(env.OTEL_EXPORTER_OTLP_PROTOCOL, undefined);
-	for (const key of [
-		"OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
-		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-		"OTEL_EXPORTER_OTLP_METRICS_HEADERS",
-		"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
-		"OTEL_RESOURCE_ATTRIBUTES",
-		"OTEL_TRACES_EXPORTER",
-		"OTEL_LOGS_EXPORTER",
-		"OTEL_METRICS_EXPORTER",
-		"OTEL_LOG_LEVEL",
-		"PI_OTEL_DISABLED",
-		"PI_OTEL_SERVICE_NAME",
-		"PI_OTEL_SERVICE_VERSION",
-		"OTEL_SERVICE_VERSION",
-	]) {
-		assert.equal(env[key], undefined, key);
+		initializePostHogTelemetry({ home, posthogFetch: async () => new Response(null, { status: 204 }) });
+		// Scripts and CI never see it, and it stays pending for the first interactive run.
+		assert.equal(telemetryFirstRunNotice(home, false), undefined);
+		assert.equal(telemetryFirstRunNotice(home, true), TELEMETRY_NOTICE);
+		// Repeats within the process so a launch that clears the screen can reprint it.
+		assert.equal(telemetryFirstRunNotice(home, true), TELEMETRY_NOTICE);
+		const state = JSON.parse(readFileSync(join(home, ".state", "telemetry.json"), "utf8")) as { noticeShown?: boolean; anonymousId?: string };
+		assert.equal(state.noticeShown, true);
+		assert.match(state.anonymousId ?? "", /^feynman_/);
+		await shutdownPostHogTelemetry();
+
+		initializePostHogTelemetry({ home, posthogFetch: async () => new Response(null, { status: 204 }) });
+		assert.equal(telemetryFirstRunNotice(home, true), undefined);
+		await shutdownPostHogTelemetry();
+
+		const optedOutHome = mkdtempSync(join(tmpdir(), "feynman-telemetry-notice-off-"));
+		process.env.FEYNMAN_TELEMETRY = "off";
+		initializePostHogTelemetry({ home: optedOutHome });
+		assert.equal(telemetryFirstRunNotice(optedOutHome, true), undefined);
+		assert.deepEqual(getPostHogChildEnv(), {});
+		rmSync(optedOutHome, { recursive: true, force: true });
+	} finally {
+		await shutdownPostHogTelemetry();
+		for (const [key, value] of Object.entries(previous)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		rmSync(home, { recursive: true, force: true });
 	}
-	assert.equal(env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, "https://us.i.posthog.com/i/v0/ai/otel");
-	assert.equal(env.OTEL_EXPORTER_OTLP_TRACES_HEADERS, "Authorization=Bearer phc_test");
-	assert.equal(env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL, "http/protobuf");
-	assert.equal(env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT, "https://us.i.posthog.com/i/v1/logs");
-	assert.equal(env.OTEL_EXPORTER_OTLP_LOGS_HEADERS, "Authorization=Bearer phc_test");
 });
 
-test("getPostHogOtelEnv clears inherited telemetry env when telemetry is disabled", () => {
-	const previousTelemetrySetting = process.env.FEYNMAN_TELEMETRY;
-	process.env.FEYNMAN_TELEMETRY = "off";
+test("Pi child env carries the CLI's PostHog project and install id only while telemetry is active", async () => {
+	const home = mkdtempSync(join(tmpdir(), "feynman-telemetry-child-env-"));
+	const previous = process.env.FEYNMAN_TELEMETRY;
+	delete process.env.FEYNMAN_TELEMETRY;
 	try {
-		const env = getPostHogOtelEnv("feynman-pi", "0.3.4");
-		const cleared = clearPostHogOtelEnv();
-		for (const key of Object.keys(cleared)) {
-			assert.equal(env[key], undefined, key);
-		}
+		assert.deepEqual(getPostHogChildEnv(), {});
+		const config = initializePostHogTelemetry({ home, posthogFetch: async () => new Response(null, { status: 204 }) });
+		assert.deepEqual(getPostHogChildEnv(), {
+			FEYNMAN_POSTHOG_KEY: DEFAULT_POSTHOG_PROJECT_TOKEN,
+			FEYNMAN_POSTHOG_HOST: DEFAULT_POSTHOG_HOST,
+			FEYNMAN_TELEMETRY_DISTINCT_ID: config?.distinctId,
+		});
+		await shutdownPostHogTelemetry();
+		assert.deepEqual(getPostHogChildEnv(), {});
 	} finally {
-		if (previousTelemetrySetting === undefined) {
-			delete process.env.FEYNMAN_TELEMETRY;
-		} else {
-			process.env.FEYNMAN_TELEMETRY = previousTelemetrySetting;
-		}
+		await shutdownPostHogTelemetry();
+		if (previous === undefined) delete process.env.FEYNMAN_TELEMETRY;
+		else process.env.FEYNMAN_TELEMETRY = previous;
+		rmSync(home, { recursive: true, force: true });
 	}
 });
 
@@ -126,7 +130,6 @@ test("PostHog transport failures open a silent session circuit breaker", async (
 		initializePostHogTelemetry({
 			home,
 			appVersion: "0.3.10",
-			serviceName: "feynman-test",
 			posthogFetch: async () => {
 				fetchAttempts += 1;
 				throw new Error("simulated unreachable telemetry endpoint");
@@ -142,6 +145,33 @@ test("PostHog transport failures open a silent session circuit breaker", async (
 
 	assert.equal(fetchAttempts, 1);
 	assert.deepEqual(consoleErrors, []);
+});
+
+test("PostHog transport sends gzip bytes without retaining Node Blob readers", async () => {
+	const home = mkdtempSync(join(tmpdir(), "feynman-telemetry-gzip-home-"));
+	let requestBody: unknown;
+	let requestHeaders: unknown;
+	try {
+		initializePostHogTelemetry({
+			home,
+			appVersion: "0.3.39",
+			posthogFetch: async (_url, options) => {
+				requestBody = options?.body;
+				requestHeaders = options?.headers;
+				return new Response(null, { status: 204 });
+			},
+		});
+		await captureTelemetryEventImmediate("gzip_body_probe");
+	} finally {
+		await shutdownPostHogTelemetry();
+		rmSync(home, { recursive: true, force: true });
+	}
+
+	assert.equal(requestBody instanceof Uint8Array, true);
+	assert.equal(requestBody instanceof Blob, false);
+	assert.deepEqual(Array.from((requestBody as Uint8Array).subarray(0, 2)), [0x1f, 0x8b]);
+	assert.equal(new Headers(requestHeaders as HeadersInit).get("content-encoding"), "gzip");
+	assert.match(gunzipSync(requestBody as Uint8Array).toString("utf8"), /gzip_body_probe/);
 });
 
 test("PostHog circuit breaker drops later requests after a non-success response", async () => {
@@ -163,185 +193,17 @@ test("PostHog circuit breaker drops later requests after a non-success response"
 	assert.match(failures[0] instanceof Error ? failures[0].message : "", /HTTP 503/);
 });
 
-test("OTLP transport makes one silent attempt and shares the open circuit with PostHog", async () => {
-	let otlpAttempts = 0;
-	let posthogAttempts = 0;
-	const failures: unknown[] = [];
-	const circuit = createTelemetryTransportCircuitBreaker((error) => failures.push(error));
-	const transport = createOneShotOtlpTransport({
-		url: "https://example.test/i/v1/traces",
-		headers: { Authorization: "Bearer test" },
-		contentType: "application/x-protobuf",
-		fetchImpl: async () => {
-			otlpAttempts += 1;
-			throw new Error("simulated blocked collector");
-		},
-		circuit,
-	});
-	const posthogFetch = createTelemetryCircuitBreakerFetch(
-		async () => {
-			posthogAttempts += 1;
-			return new Response(null, { status: 204 });
-		},
-		(error) => failures.push(error),
-		circuit,
-	);
-
-	assert.deepEqual(await transport.send(new Uint8Array([1, 2, 3]), 50), { status: "success" });
-	assert.deepEqual(await transport.send(new Uint8Array([4, 5, 6]), 50), { status: "success" });
-	assert.equal((await posthogFetch("https://example.test/batch", { method: "POST", headers: {} })).status, 204);
-	assert.equal(otlpAttempts, 1);
-	assert.equal(posthogAttempts, 0);
-	assert.equal(failures.length, 1);
-	assert.equal(circuit.isOpen(), true);
-});
-
-test("getPostHogOtelEnv clears inherited collectors before setting PostHog routes", () => {
-	const inheritedKeys = [
-		"OTEL_EXPORTER_OTLP_ENDPOINT",
-		"OTEL_EXPORTER_OTLP_HEADERS",
-		"OTEL_EXPORTER_OTLP_PROTOCOL",
-		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-		"OTEL_EXPORTER_OTLP_TRACES_HEADERS",
-		"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
-		"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-		"OTEL_EXPORTER_OTLP_LOGS_HEADERS",
-		"OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
-		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-		"OTEL_EXPORTER_OTLP_METRICS_HEADERS",
-		"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
-		"OTEL_RESOURCE_ATTRIBUTES",
-		"OTEL_TRACES_EXPORTER",
-		"OTEL_LOGS_EXPORTER",
-		"OTEL_METRICS_EXPORTER",
-		"OTEL_LOG_LEVEL",
-		"PI_OTEL_DISABLED",
-		"PI_OTEL_CAPTURE_CONTENT",
-		"PI_OTEL_LOGS",
-		"PI_OTEL_METRICS",
-		"PI_OTEL_SERVICE_NAME",
-		"PI_OTEL_SERVICE_VERSION",
-		"OTEL_SERVICE_NAME",
-		"OTEL_SERVICE_VERSION",
-	];
-	const savedEnvKeys = [
-		"FEYNMAN_TELEMETRY",
-		"FEYNMAN_TELEMETRY_DISTINCT_ID",
-		"FEYNMAN_POSTHOG_KEY",
-		"FEYNMAN_POSTHOG_HOST",
-		"FEYNMAN_POSTHOG_PROJECT_ID",
-		"DO_NOT_TRACK",
-		...inheritedKeys,
-	];
-	const savedEnv = Object.fromEntries(savedEnvKeys.map((key) => [key, process.env[key]]));
-
-	for (const key of inheritedKeys) {
-		process.env[key] = `private-${key.toLowerCase()}`;
-	}
-	process.env.FEYNMAN_TELEMETRY = "1";
-	process.env.FEYNMAN_TELEMETRY_DISTINCT_ID = "feynman_test";
-	delete process.env.FEYNMAN_POSTHOG_KEY;
-	delete process.env.FEYNMAN_POSTHOG_HOST;
-	delete process.env.FEYNMAN_POSTHOG_PROJECT_ID;
-	delete process.env.DO_NOT_TRACK;
-
-	try {
-		const env = getPostHogOtelEnv("feynman-pi", "0.3.4");
-
-		assert.equal(env.FEYNMAN_POSTHOG_HOST, DEFAULT_POSTHOG_HOST);
-		assert.equal(env.FEYNMAN_POSTHOG_KEY, DEFAULT_POSTHOG_PROJECT_TOKEN);
-		assert.equal(env.FEYNMAN_POSTHOG_PROJECT_ID, DEFAULT_POSTHOG_PROJECT_ID);
-		assert.equal(env.PI_OTEL_CAPTURE_CONTENT, "metadata_only");
-		assert.equal(env.PI_OTEL_LOGS, "0");
-		assert.equal(env.PI_OTEL_METRICS, "0");
-		assert.equal(env.OTEL_SERVICE_NAME, "feynman-pi");
-		assert.equal(env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, `${DEFAULT_POSTHOG_HOST}/i/v0/ai/otel`);
-		assert.match(env.OTEL_EXPORTER_OTLP_TRACES_HEADERS ?? "", /^Authorization=Bearer phc_/);
-		assert.equal(env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL, "http/protobuf");
-		assert.equal(env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT, `${DEFAULT_POSTHOG_HOST}/i/v1/logs`);
-		assert.match(env.OTEL_EXPORTER_OTLP_LOGS_HEADERS ?? "", /^Authorization=Bearer phc_/);
-		for (const key of [
-			"OTEL_EXPORTER_OTLP_ENDPOINT",
-			"OTEL_EXPORTER_OTLP_HEADERS",
-			"OTEL_EXPORTER_OTLP_PROTOCOL",
-			"OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
-			"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-			"OTEL_EXPORTER_OTLP_METRICS_HEADERS",
-			"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
-			"OTEL_RESOURCE_ATTRIBUTES",
-			"OTEL_TRACES_EXPORTER",
-			"OTEL_LOGS_EXPORTER",
-			"OTEL_METRICS_EXPORTER",
-			"OTEL_LOG_LEVEL",
-			"PI_OTEL_DISABLED",
-			"PI_OTEL_SERVICE_NAME",
-			"PI_OTEL_SERVICE_VERSION",
-			"OTEL_SERVICE_VERSION",
-		]) {
-			assert.equal(env[key], undefined, key);
-		}
-	} finally {
-		for (const [key, value] of Object.entries(savedEnv)) {
-			if (value === undefined) {
-				delete process.env[key];
-			} else {
-				process.env[key] = value;
-			}
-		}
-	}
-});
-
-test("getCliTelemetryMetadata records rank shape without raw topic, prompt, or paths", () => {
-	const metadata = getCliTelemetryMetadata([
-		"rank",
-		"private mechanistic interpretability topic",
-		"--prompt",
-		"private model prompt",
-		"--source-fixture",
-		"/private/path/openalex.json",
-		"--preference-file=/private/path/preferences.json",
-		"--reproduction-notes",
-		"/private/path/reproduction.json",
-		"--synthesize",
-		"--limit",
-		"7",
-	]);
-	const serialized = JSON.stringify(metadata);
-
-	assert.equal(metadata.command, "rank");
-	assert.equal(metadata.rank_topic_provided, true);
-	assert.equal(metadata.has_prompt, true);
-	assert.equal(metadata.source_fixture, true);
-	assert.equal(metadata.preference_file, true);
-	assert.equal(metadata.reproduction_notes, true);
-	assert.equal(metadata.synthesize, true);
-	assert.equal(metadata.rank_limit, 7);
-	assert.equal(serialized.includes("mechanistic"), false);
-	assert.equal(serialized.includes("private model prompt"), false);
-	assert.equal(serialized.includes("/private/path"), false);
-});
-
 test("getCliTelemetryMetadata does not record unknown commands or malformed flag values", () => {
 	const metadata = getCliTelemetryMetadata([
 		"private-research-prompt",
 		"--mode",
 		"/private/path/mode",
-		"--limit",
-		"/private/path/limit",
-		"--expand-citations=/private/path/citations",
-		"--full-text-top",
-		"2",
-		"--critique-top",
-		"not-a-number",
+		"--service-tier=not-a-number",
 	]);
 	const serialized = JSON.stringify(metadata);
 
 	assert.equal(metadata.command, "chat");
 	assert.equal(metadata.mode, undefined);
-	assert.equal(metadata.rank_limit, undefined);
-	assert.equal(metadata.rank_expand_citations, undefined);
-	assert.equal(metadata.rank_full_text_top, undefined);
-	assert.equal(metadata.rank_critique_top, undefined);
 	assert.equal(serialized.includes("private-research-prompt"), false);
 	assert.equal(serialized.includes("/private/path"), false);
 	assert.equal(serialized.includes("not-a-number"), false);
@@ -353,7 +215,6 @@ test("getCliTelemetryMetadata keeps whitelisted workflow commands and safe subco
 	const knownSubcommand = getCliTelemetryMetadata(["model", "list"]);
 
 	assert.equal(workflow.command, "review");
-	assert.equal(workflow.rank_topic_provided, false);
 	assert.equal(unknownSubcommand.command, "model");
 	assert.equal(unknownSubcommand.subcommand, undefined);
 	assert.equal(knownSubcommand.command, "model");
@@ -372,23 +233,6 @@ test("getCliTelemetryMetadata does not treat double-dash prompt text as a comman
 	assert.equal(metadata.command, "chat");
 	assert.equal(serialized.includes("private"), false);
 	assert.equal(serialized.includes("one-shot"), false);
-});
-
-test("sanitizeTelemetryException keeps only an error kind and message hash", () => {
-	const error = new Error("private prompt from /Users/advaitpaliwal/secret-paper.md");
-	error.stack = "Error: private prompt\n    at /Users/advaitpaliwal/secret-paper.md:1:1";
-	const sanitized = sanitizeTelemetryException(error);
-	const properties = telemetryErrorProperties(error);
-	const serialized = JSON.stringify({ sanitized, properties });
-
-	assert.equal(sanitized.name, "Error");
-	assert.equal(sanitized.message, `error_message_hash:${properties.error_message_hash}`);
-	assert.equal(properties.error_name, "Error");
-	assert.match(String(properties.error_message_hash), /^[a-f0-9]{16}$/);
-	assert.equal(serialized.includes("private prompt"), false);
-	assert.equal(serialized.includes("/Users/advaitpaliwal"), false);
-	assert.equal(serialized.includes("secret-paper"), false);
-	assert.equal("stack" in sanitized, false);
 });
 
 test("telemetryErrorProperties falls back when Error.name is not a safe class label", () => {
@@ -411,4 +255,57 @@ test("normalizeTelemetryProperties keeps bounded snake_case scalar properties", 
 	assert.equal(normalized.command_name, "rank");
 	assert.equal(normalized.duration_ms, 123);
 	assert.equal(String(normalized.raw).length, 240);
+});
+
+test("error text is sent raw with the home folder shown as ~", () => {
+	const home = "/Users/someone";
+	assert.equal(redactTelemetryText(`ENOENT: open '${home}/proj/outputs/x.md'`, home), "ENOENT: open '~/proj/outputs/x.md'");
+	assert.equal(redactTelemetryText("C:\\Users\\someone\\a and C:/Users/someone/b", "C:\\Users\\someone"), "~\\a and ~/b");
+	assert.equal(redactTelemetryText("x".repeat(5000), home).length, 4003);
+	assert.equal(telemetryErrorProperties(new Error("Unknown model: openai/gpt-9")).error_message, "Unknown model: openai/gpt-9");
+	const stderr = "line one\n  at frame (file.js:1:2)\n";
+	assert.equal(normalizeTelemetryProperties({ pi_stderr: stderr }).pi_stderr, stderr.trim());
+});
+
+test("captureTelemetryException sends a redacted stack trace to PostHog error tracking", async () => {
+	const home = mkdtempSync(join(tmpdir(), "feynman-telemetry-exception-home-"));
+	const bodies: string[] = [];
+	try {
+		initializePostHogTelemetry({
+			home,
+			posthogFetch: async (_url, options) => {
+				bodies.push(gunzipSync(options?.body as Uint8Array).toString("utf8"));
+				return new Response(null, { status: 204 });
+			},
+		});
+		const error = new TypeError(`boom in ${homedir()}/project`);
+		error.stack = `TypeError: boom in ${homedir()}/project\n    at run (${homedir()}/app/cli.js:10:5)`;
+		await captureTelemetryException(error, { command: "chat" });
+		await shutdownPostHogTelemetry();
+	} finally {
+		await shutdownPostHogTelemetry();
+		rmSync(home, { recursive: true, force: true });
+	}
+	const sent = bodies.join("\n");
+	assert.match(sent, /\$exception/);
+	assert.match(sent, /boom in ~\/project/);
+	assert.match(sent, /cli\.js/);
+	assert.equal(sent.includes(homedir()), false);
+});
+
+test("a telemetry send that gets no answer ends quietly within its budget", async () => {
+	const failures: unknown[] = [];
+	const hangingFetch = ((_url: string, options?: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+		options?.signal?.addEventListener("abort", () => reject(options.signal!.reason));
+	})) as never;
+	const send = createTelemetryCircuitBreakerFetch(hangingFetch, (error) => failures.push(error), 200);
+	const started = Date.now();
+	// AbortSignal.timeout's timer does not hold the event loop open; on Node 22
+	// the test would end before it fires.
+	const keepAlive = setTimeout(() => {}, 2000);
+	const response = await send("https://posthog.test/batch/", { method: "POST", headers: {} } as never);
+	clearTimeout(keepAlive);
+	assert.equal(response.status, 204);
+	assert.ok(Date.now() - started < 1000, `took ${Date.now() - started}ms`);
+	assert.equal(failures.length, 1);
 });

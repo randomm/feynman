@@ -8,19 +8,16 @@ import { dirname, join } from "node:path";
 import {
 	appendWorkflowFlagPositionals,
 	buildLocalModelWorkflowNotice,
-	formatRankModelSynthesisLine,
-	parsePositiveInteger,
 	resolveAlphaPassthroughArgs,
 	resolveInitialPrompt,
 	resolvePiPromptOptions,
-	resolveRankSynthesisModelSpec,
 	resolveThinkingConfig,
 	shouldRunInteractiveSetup,
 } from "../src/cli.js";
-import { buildModelStatusSnapshotFromRecords, chooseRecommendedModel, getAvailableModelRecords } from "../src/model/catalog.js";
-import { isLocalModelProvider, resolveModelProviderForCommand, setDefaultModelSpec } from "../src/model/commands.js";
+import { buildModelStatusSnapshotFromRecords, choosePreferredModelRecord, chooseRecommendedModel, getAvailableModelRecords, getSupportedModelRecords, isProClassModelSpec } from "../src/model/catalog.js";
+import { MODEL_API_KEY_PROVIDERS } from "../src/model/api-key-providers.js";
+import { getOrCreateDeviceId, isLocalModelProvider, resolveModelProviderForCommand, setDefaultModelSpec } from "../src/model/commands.js";
 import { createModelRegistry } from "../src/model/registry.js";
-import { supportsNativePackageSources } from "../src/pi/package-presets.js";
 import { canonicalizeModelSpec, parseModelSpec } from "../src/pi/settings.js";
 
 function createAuthPath(contents: Record<string, unknown>): string {
@@ -74,6 +71,26 @@ function asModelSpec(model: { provider: string; id: string }): string {
 	return `${model.provider}/${model.id}`;
 }
 
+test("choosePreferredModelRecord picks newest Opus and the standard GPT tier, never premium tiers", () => {
+	const pick = (specs: string[]) => {
+		const chosen = choosePreferredModelRecord(specs.map((spec) => {
+			const [provider, id] = spec.split("/") as [string, string];
+			return { provider, id };
+		}));
+		return chosen && `${chosen.provider}/${chosen.id}`;
+	};
+
+	assert.equal(
+		pick(["openai/gpt-5.5", "openai/gpt-6-sol", "anthropic/claude-opus-4-8", "anthropic/claude-opus-5-5", "anthropic/claude-fable-5-1"]),
+		"anthropic/claude-opus-5-5",
+	);
+	assert.equal(
+		pick(["openai/gpt-5.5", "openai/gpt-5.5-pro", "openai/gpt-5.6-luna", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/gpt-6-astra", "openai/gpt-6-sol", "openai/gpt-6-luna"]),
+		"openai/gpt-5.6-terra",
+	);
+	assert.equal(pick(["anthropic/claude-fable-5-1"]), undefined);
+});
+
 test("chooseRecommendedModel prefers the strongest authenticated research model", async () => {
 	const authPath = createAuthPath({
 		openai: { type: "api_key", key: "openai-test-key" },
@@ -82,7 +99,7 @@ test("chooseRecommendedModel prefers the strongest authenticated research model"
 
 	const recommendation = await chooseRecommendedModel(authPath);
 
-	assert.equal(recommendation?.spec, "anthropic/claude-opus-5");
+	assert.equal(recommendation?.spec, "anthropic/claude-opus-5-5");
 });
 
 test("chooseRecommendedModel prefers the newest OpenAI GPT exposed by Pi", async () => {
@@ -92,20 +109,16 @@ test("chooseRecommendedModel prefers the newest OpenAI GPT exposed by Pi", async
 
 	const recommendation = await chooseRecommendedModel(authPath);
 
-	assert.match(recommendation?.spec ?? "", /^openai\/gpt-\d/);
+	// Pi 0.87.1 catalogs GPT-5.6 and GPT-6 tiers; Terra is the standard one.
+	assert.equal(recommendation?.spec, "openai/gpt-5.6-terra");
 	assert.match(recommendation?.reason ?? "", /newest authenticated OpenAI GPT model/);
 });
 
-test("resolveRankSynthesisModelSpec uses the recommended research model instead of a stale default", async () => {
-	const authPath = createAuthPath({
-		openai: { type: "api_key", key: "openai-test-key" },
-	});
-	const recommendation = await chooseRecommendedModel(authPath);
-	const explicitOpenAiModel = await getOpenAiGptModel(authPath);
-	const explicitOpenAiSpec = asModelSpec(explicitOpenAiModel);
+test("explicit model selection accepts DeepSeek V4 Pro but rejects premium Pro tiers", () => {
+	const deepSeekSpec = "nebius/deepseek-ai/DeepSeek-V4-Pro";
 
-	assert.equal(await resolveRankSynthesisModelSpec(authPath, undefined), recommendation?.spec);
-	assert.equal(await resolveRankSynthesisModelSpec(authPath, explicitOpenAiSpec), explicitOpenAiSpec);
+	assert.equal(isProClassModelSpec(deepSeekSpec), false);
+	assert.equal(isProClassModelSpec("google/gemini-3.1-pro"), true);
 });
 
 test("model specs preserve colon-bearing custom model ids and canonicalize Pi launch syntax", async () => {
@@ -135,15 +148,6 @@ test("model specs preserve colon-bearing custom model ids and canonicalize Pi la
 		assert.equal(model?.id, "qwen3:0.6b");
 		assert.equal(canonicalizeModelSpec(spec, registry), "ollama/qwen3:0.6b");
 	}
-});
-
-test("parsePositiveInteger rejects partial numeric strings", () => {
-	assert.equal(parsePositiveInteger(undefined, 180_000), 180_000);
-	assert.equal(parsePositiveInteger("120000", 180_000), 120_000);
-	assert.equal(parsePositiveInteger(" 120000 ", 180_000), 120_000);
-	assert.equal(parsePositiveInteger("120000ms", 180_000), 180_000);
-	assert.equal(parsePositiveInteger("1.5", 180_000), 180_000);
-	assert.equal(parsePositiveInteger("0", 180_000), 180_000);
 });
 
 test("resolveAlphaPassthroughArgs preserves alpha flags after leading cwd", () => {
@@ -179,7 +183,29 @@ test("feynman alpha reaches Alpha Hub help when cwd is supplied before alpha", (
 
 	assert.equal(result.status, 0, result.stderr);
 	assert.match(result.stdout, /Alpha Hub - search papers and annotate what you learn/);
-	assert.doesNotMatch(result.stdout, /Research-first agent shell built on Pi/);
+	assert.doesNotMatch(result.stdout, /The open source AI research agent/);
+});
+
+test("common wrong flags and commands name the right one", () => {
+	const homeDir = mkdtempSync(join(tmpdir(), "feynman-hints-home-"));
+	const run = (args: string[]) => {
+		const result = spawnSync(process.execPath, ["--import", "tsx", "src/index.ts", ...args], {
+			cwd: process.cwd(),
+			encoding: "utf8",
+			env: { ...process.env, FEYNMAN_HOME: homeDir, FEYNMAN_TELEMETRY: "0" },
+			input: "",
+			maxBuffer: 1024 * 1024,
+		});
+		return `${result.stdout}\n${result.stderr}`;
+	};
+	assert.match(run(["--setup"]), /Did you mean `feynman setup`\?/);
+	assert.match(run(["--list-models"]), /Did you mean `feynman model list`\?/);
+	assert.match(run(["model", "openai/gpt-6-sol"]), /Did you mean `feynman model set openai\/gpt-6-sol`\?/);
+	assert.match(run(["setup", "model"]), /To choose a model, run `feynman model login` or `feynman model set`\./);
+	assert.doesNotMatch(run(["-p", "hi", "--model", "nope/none"]), /Unknown option '-p'/);
+	assert.match(run(["--json"]), /Did you mean `feynman --mode json`\?/);
+	assert.match(run(["--work-dir", "x"]), /Did you mean `feynman --cwd <dir>`\?/);
+	assert.match(run(["-v"]), /^\d+\.\d+\.\d+$/m);
 });
 
 test("unknown CLI flags point users to Feynman help", () => {
@@ -199,6 +225,27 @@ test("unknown CLI flags point users to Feynman help", () => {
 	assert.equal(result.status, 1);
 	assert.match(`${result.stdout}\n${result.stderr}`, /Unknown option '--extensions'/);
 	assert.match(`${result.stdout}\n${result.stderr}`, /Run `feynman help` to see available commands and flags/);
+});
+
+test("packages remove accepts rm and uninstall and skips presets that are not installed", () => {
+	const workingDir = mkdtempSync(join(tmpdir(), "feynman-packages-remove-cwd-"));
+	const homeDir = mkdtempSync(join(tmpdir(), "feynman-packages-remove-home-"));
+	const run = (args: string[]) =>
+		spawnSync(process.execPath, ["--import", "tsx", "src/index.ts", "--cwd", workingDir, "packages", ...args], {
+			cwd: process.cwd(),
+			encoding: "utf8",
+			env: { ...process.env, FEYNMAN_HOME: homeDir, FEYNMAN_TELEMETRY: "0", NO_COLOR: "1" },
+			maxBuffer: 1024 * 1024,
+		});
+
+	for (const command of ["remove", "rm", "uninstall"]) {
+		const result = run([command, "memory"]);
+		assert.equal(result.status, 0, result.stderr);
+		assert.match(result.stdout, /is not installed/);
+	}
+	const unknown = run(["prune"]);
+	assert.equal(unknown.status, 1);
+	assert.match(unknown.stderr, /Unknown packages command: prune\nUse: feynman packages list, install <preset>, or remove <preset>\./);
 });
 
 test("packages CLI hides removed UI and bulk extras", () => {
@@ -222,11 +269,7 @@ test("packages CLI hides removed UI and bulk extras", () => {
 	assert.match(listResult.stdout, /hindsight/);
 	assert.match(listResult.stdout, /Research-session preference and correction memory/);
 	assert.match(listResult.stdout, /Hindsight-backed research continuity memory/);
-	if (supportsNativePackageSources()) {
-		assert.match(listResult.stdout, /prior research session transcripts/);
-	} else {
-		assert.doesNotMatch(listResult.stdout, /session-search/);
-	}
+	assert.doesNotMatch(listResult.stdout, /session-search/);
 	assert.doesNotMatch(listResult.stdout, /Preference and correction memory across sessions|long-term memory for Pi|prior session transcripts/);
 	assert.doesNotMatch(listResult.stdout, /all-extras|generative-ui|pi-generative-ui/);
 
@@ -243,42 +286,28 @@ test("packages CLI hides removed UI and bulk extras", () => {
 	}
 });
 
-test("PaperRank synthesis CLI line names the model and selection source", () => {
-	const line = formatRankModelSynthesisLine(
-		{
-			status: "generated",
-			model: "openai/gpt-5",
-			modelSelection: {
-				source: "recommended",
-				resolvedModel: "openai/gpt-5",
-				reason: "newest authenticated OpenAI GPT model for research synthesis",
-			},
-		},
-		"/tmp/example-model-synthesis.md",
-	);
-
-	assert.equal(
-		line,
-		"Model synthesis: generated by openai/gpt-5 (recommended current research model; resolved openai/gpt-5); /tmp/example-model-synthesis.md",
-	);
+test("every API-key provider Feynman offers is a provider Pi knows", async () => {
+	// Pi 1.0.3 renamed azure-openai-responses to azure; a stale id would save
+	// credentials no model uses.
+	const authPath = createAuthPath({});
+	const piProviders = new Set((await getSupportedModelRecords(authPath)).map((model) => model.provider));
+	const unknown = MODEL_API_KEY_PROVIDERS.filter((provider) => provider.envVar && !piProviders.has(provider.id)).map((provider) => provider.id);
+	assert.deepEqual(unknown, []);
 });
 
-test("PaperRank synthesis CLI line labels explicit models as overrides", () => {
-	const line = formatRankModelSynthesisLine({
-		status: "generated",
-		model: "openai/gpt-5",
-		modelSelection: {
-			source: "explicit",
-			requestedModel: "openai/gpt-5",
-			resolvedModel: "openai/gpt-5",
-			reason: "explicit CLI override",
-		},
-	});
+test("chooseRecommendedModel prefers Copilot Claude Opus over alphabetical order", async () => {
+	await withoutModelEnv(async () => {
+		// Copilot writes Claude versions with dots; unrecognized, they fell back to
+		// alphabetical order and new users got claude-haiku-4.5.
+		const authPath = createAuthPath({
+			"github-copilot": { type: "oauth", refresh: "r", access: "a", expires: Date.now() + 3_600_000 },
+		});
 
-	assert.equal(
-		line,
-		"Model synthesis: generated by openai/gpt-5 (explicit override; resolved openai/gpt-5)",
-	);
+		const recommendation = await chooseRecommendedModel(authPath);
+
+		assert.equal(recommendation?.spec, "github-copilot/claude-opus-5.5");
+		assert.match(recommendation?.reason ?? "", /GitHub Copilot/);
+	});
 });
 
 test("chooseRecommendedModel prefers OpenCode Zen Claude when OpenCode is the authenticated provider", async () => {
@@ -289,7 +318,7 @@ test("chooseRecommendedModel prefers OpenCode Zen Claude when OpenCode is the au
 
 		const recommendation = await chooseRecommendedModel(authPath);
 
-		assert.equal(recommendation?.spec, "opencode/claude-opus-5");
+		assert.equal(recommendation?.spec, "opencode/claude-opus-5-5");
 	});
 });
 
@@ -301,7 +330,7 @@ test("chooseRecommendedModel prefers OpenCode Go Kimi when OpenCode Go is the au
 
 		const recommendation = await chooseRecommendedModel(authPath);
 
-		assert.equal(recommendation?.spec, "opencode-go/kimi-k2.6");
+		assert.equal(recommendation?.spec, "opencode-go/kimi-k2.7-code");
 	});
 });
 
@@ -359,7 +388,7 @@ test("setDefaultModelSpec accepts a unique bare model id from authenticated mode
 	};
 	assert.equal(settings.defaultProvider, "openai");
 	assert.equal(settings.defaultModel, openAiModel.id);
-	assert.match(logs.join("\n"), /Non-Pro default model set to openai\//);
+	assert.match(logs.join("\n"), /Research default model set to openai\//);
 });
 
 test("setDefaultModelSpec accepts provider:model syntax for authenticated models", async () => {
@@ -378,6 +407,119 @@ test("setDefaultModelSpec accepts provider:model syntax for authenticated models
 	};
 	assert.equal(settings.defaultProvider, "openai");
 	assert.equal(settings.defaultModel, openAiModel.id);
+});
+
+test("setDefaultModelSpec accepts an authenticated DeepSeek V4 Pro model", async () => {
+	const authPath = createAuthPath({
+		nebius: { type: "api_key", key: "nebius-test-key" },
+	});
+	writeFileSync(
+		join(dirname(authPath), "models.json"),
+		JSON.stringify({
+			providers: {
+				nebius: {
+					baseUrl: "https://api.studio.nebius.ai/v1",
+					api: "openai-completions",
+					models: [{ id: "deepseek-ai/DeepSeek-V4-Pro" }],
+				},
+			},
+		}) + "\n",
+		"utf8",
+	);
+	const settingsPath = join(mkdtempSync(join(tmpdir(), "feynman-settings-")), "settings.json");
+
+	await setDefaultModelSpec(settingsPath, authPath, "nebius/deepseek-ai/DeepSeek-V4-Pro");
+
+	const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as {
+		defaultProvider?: string;
+		defaultModel?: string;
+	};
+	assert.equal(settings.defaultProvider, "nebius");
+	assert.equal(settings.defaultModel, "deepseek-ai/DeepSeek-V4-Pro");
+});
+
+test("setDefaultModelSpec explains why a model spec is unusable", async () => {
+	await withoutModelEnv(async () => {
+		const authPath = createAuthPath({ openai: { type: "api_key", key: "openai-test-key" } });
+		writeFileSync(
+			join(dirname(authPath), "models.json"),
+			JSON.stringify({
+				providers: {
+					ollama: {
+						baseUrl: "http://localhost:11434/v1",
+						api: "openai-completions",
+						models: [{ id: "qwen3:8b" }],
+					},
+				},
+			}) + "\n",
+			"utf8",
+		);
+		const settingsPath = join(mkdtempSync(join(tmpdir(), "feynman-settings-")), "settings.json");
+		const openAiModel = await getOpenAiGptModel(authPath);
+
+		await assert.rejects(
+			setDefaultModelSpec(settingsPath, authPath, "ollama:qwen3:8b"),
+			/ollama\/qwen3:8b has no API key\. .*add "apiKey": "local" to the ollama provider in .*models\.json/,
+		);
+		await assert.rejects(
+			setDefaultModelSpec(settingsPath, authPath, "anthropic/claude-opus-5-5"),
+			/anthropic\/claude-opus-5-5 has no credentials\. Run `feynman model login anthropic` first\./,
+		);
+		const partialId = openAiModel.id.slice(0, -2);
+		await assert.rejects(
+			setDefaultModelSpec(settingsPath, authPath, partialId),
+			new RegExp(`Unknown model: ${partialId}\\. Did you mean .*openai/${openAiModel.id}.*\\? Run \`feynman model list\``),
+		);
+	});
+});
+
+test("--tui-mode reaches Pi, which validates it", () => {
+	const homeDir = mkdtempSync(join(tmpdir(), "feynman-tui-mode-home-"));
+	const result = spawnSync(process.execPath, ["--import", "tsx", "src/index.ts", "--tui-mode", "bogus", "--mode", "rpc", "--no-session"], {
+		cwd: process.cwd(),
+		encoding: "utf8",
+		env: { ...process.env, FEYNMAN_HOME: homeDir, FEYNMAN_TELEMETRY: "0" },
+		input: "",
+		maxBuffer: 1024 * 1024,
+	});
+	assert.equal(result.status, 1);
+	assert.match(`${result.stdout}\n${result.stderr}`, /Invalid TUI mode "bogus"/);
+	assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /Unknown option '--tui-mode'/);
+});
+
+test("model help lists model commands, and -h is an alias for --help", () => {
+	const homeDir = mkdtempSync(join(tmpdir(), "feynman-model-help-home-"));
+	const run = (args: string[]) =>
+		spawnSync(process.execPath, ["--import", "tsx", "src/index.ts", ...args], {
+			cwd: process.cwd(),
+			encoding: "utf8",
+			env: { ...process.env, FEYNMAN_HOME: homeDir, FEYNMAN_TELEMETRY: "0" },
+			maxBuffer: 1024 * 1024,
+		});
+
+	const help = run(["model", "help"]);
+	assert.equal(help.status, 0);
+	assert.match(help.stdout, /feynman model set/);
+	assert.match(help.stdout, /feynman model login/);
+
+	const unknown = run(["model", "change"]);
+	assert.equal(unknown.status, 1);
+	assert.match(unknown.stderr, /Unknown model command: change\nRun `feynman model help` to see model commands\./);
+
+	const shortHelp = run(["-h"]);
+	assert.equal(shortHelp.status, 0);
+	assert.match(shortHelp.stdout, /feynman model list/);
+});
+
+test("OAuth login reuses one device ID stored in the agent settings", () => {
+	const authPath = createAuthPath({});
+	const settingsPath = join(dirname(authPath), "settings.json");
+	writeFileSync(settingsPath, JSON.stringify({ defaultProvider: "openai", defaultModel: "gpt-5.6-terra" }));
+
+	const first = getOrCreateDeviceId(authPath);
+	assert.match(first, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+	assert.equal(getOrCreateDeviceId(authPath), first);
+	assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), { defaultProvider: "openai", defaultModel: "gpt-5.6-terra", deviceId: first });
 });
 
 test("resolveModelProviderForCommand falls back to API-key providers when OAuth is unavailable", async () => {
@@ -475,8 +617,6 @@ test("chooseRecommendedModel prefers kimi-for-coding when Kimi Coding is the aut
 test("resolveInitialPrompt maps top-level research commands to Pi slash workflows", () => {
 	const workflows = new Set([
 		"lit",
-		"watch",
-		"jobs",
 		"deepresearch",
 		"review",
 		"audit",
@@ -489,8 +629,6 @@ test("resolveInitialPrompt maps top-level research commands to Pi slash workflow
 		"log",
 	]);
 	assert.equal(resolveInitialPrompt("lit", ["tool-using", "agents"], undefined, workflows), "/lit tool-using agents");
-	assert.equal(resolveInitialPrompt("watch", ["openai"], undefined, workflows), "/watch openai");
-	assert.equal(resolveInitialPrompt("jobs", [], undefined, workflows), "/jobs");
 	assert.equal(resolveInitialPrompt("deepresearch", ["scaling", "laws"], undefined, workflows), "/deepresearch scaling laws");
 	assert.equal(resolveInitialPrompt("review", ["paper.md"], undefined, workflows), "/review paper.md");
 	assert.equal(resolveInitialPrompt("audit", ["2401.12345"], undefined, workflows), "/audit 2401.12345");
@@ -502,7 +640,6 @@ test("resolveInitialPrompt maps top-level research commands to Pi slash workflow
 	assert.equal(resolveInitialPrompt("summarize", ["README.md"], undefined, workflows), "/summarize README.md");
 	assert.equal(resolveInitialPrompt("log", [], undefined, workflows), "/log");
 	assert.equal(resolveInitialPrompt("chat", ["hello"], undefined, workflows), "hello");
-	assert.equal(resolveInitialPrompt("rank", ["sparse", "autoencoders"], undefined, workflows), undefined);
 	assert.equal(resolveInitialPrompt("unknown", ["topic"], undefined, workflows), "unknown topic");
 });
 

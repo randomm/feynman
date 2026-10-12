@@ -1,14 +1,12 @@
 node_modules
+.wrangler/
 .env
-.feynman/npm
 .feynman/git
 .feynman/sessions
-.feynman/workbench
 .feynman/cache
 .feynman/schedule-prompts.json
 dist
 *.tgz
-.feynman/runtime-workspace.sha256
 outputs/*
 !outputs/.gitkeep
 papers/*
@@ -17,3 +15,7 @@ notes/*
 !notes/.gitkeep
 experiments/*
 !experiments/.gitkeep
+.astro/
+
+# Local agent lab notebook (see AGENTS.md); not tracked.
+/CHANGELOG.md

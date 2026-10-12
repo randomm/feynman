@@ -1,0 +1,36 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+// Most failed research runs end on a provider error (quota, a key, a model the
+// plan lacks). Pi follows them with its /bug hint, which reports to Pi's
+// developers; this names the cause and the fix instead.
+export function modelErrorHint(provider: string, error: string): string | undefined {
+	const login = `feynman model login ${provider}`;
+	if (/model_not_supported|requested model is not supported|not available to new users|does not support tools/i.test(error)) {
+		return `Your ${provider} account can't use this model. Pick another with /model (or \`feynman model set\`).`;
+	}
+	if (/\b402\b|credit|billing|balance is insufficient|payment required/i.test(error)) {
+		return `Your ${provider} account is out of credits. Add credits, or switch provider with /model.`;
+	}
+	if (/\b429\b|quota|rate.?limit|usage limit|resource.?exhausted|capacity|too many requests/i.test(error)) {
+		return `${provider} is rate-limiting this account or its quota is used up. Wait and retry, or switch model with /model.`;
+	}
+	if (/\b40[13]\b|invalid.{0,20}(api.?key|x-api-key|token)|authentication|unauthori[sz]ed|invalid_grant|refresh token/i.test(error)) {
+		return `${provider} rejected your credentials. Run \`${login}\` again, or check the API key you set.`;
+	}
+	if (/\b50[0-4]\b|overloaded|high demand|unavailable|timed out|timeout|terminated|connection error|fetch failed|ECONNRESET/i.test(error)) {
+		return `${provider} failed or timed out; this is usually temporary. Retry, or switch model with /model.`;
+	}
+	return undefined;
+}
+
+export function registerModelErrorHint(pi: ExtensionAPI): void {
+	pi.on("message_end", (event, ctx) => {
+		const message = event.message;
+		if (message.role !== "assistant" || message.stopReason !== "error" || !ctx.hasUI) return;
+		const hint = modelErrorHint(message.provider, message.errorMessage ?? "");
+		ctx.ui.notify(
+			`${hint ?? `${message.provider} returned an error.`} If this looks like a Feynman bug, report it at https://github.com/Companion-Inc/feynman/issues (Pi's /bug goes to Pi's developers).`,
+			"warning",
+		);
+	});
+}

@@ -11,7 +11,12 @@ on:
         default: "latest"
 
 env:
+  # Keep CI runs out of the usage telemetry.
+  FEYNMAN_TELEMETRY: "off"
   FEYNMAN_VERSION_INPUT: ${{ github.event.inputs.version || 'latest' }}
+
+permissions:
+  contents: read
 
 jobs:
   install-e2e:
@@ -30,9 +35,9 @@ jobs:
           - os: windows-latest
             node: 24
           - os: windows-latest
-            node: 25
+            node: 26
           - os: ubuntu-latest
-            node: 25
+            node: 26
     runs-on: ${{ matrix.os }}
     env:
       HAS_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
@@ -40,7 +45,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
 
@@ -67,48 +72,8 @@ jobs:
           feynman update
           feynman search status
 
-      - name: Assert pi-subagents spawn patch applied (issue 172)
-        # Running the CLI above applies launch-time patches to the bundled
-        # workspace. The patched pi-spawn must prefer FEYNMAN_PI_CLI_PATH so
-        # subagents never treat --mode as a module path.
-        run: |
-          node -e '
-            const { execSync } = require("node:child_process");
-            const { existsSync, readFileSync } = require("node:fs");
-            const { join } = require("node:path");
-            const root = execSync("npm root -g").toString().trim();
-            const pkg = join(root, "@companion-ai", "feynman");
-            const candidates = [
-              join(pkg, ".feynman", "npm", "node_modules", "pi-subagents", "src", "runs", "shared", "pi-spawn.ts"),
-              join(pkg, ".feynman", "npm", "node_modules", "pi-subagents", "pi-spawn.ts"),
-            ];
-            const found = candidates.filter((p) => existsSync(p));
-            if (found.length === 0) throw new Error("pi-spawn source not found under " + pkg);
-            const patched = found.filter((p) => readFileSync(p, "utf8").includes("FEYNMAN_PI_CLI_PATH"));
-            if (patched.length === 0) throw new Error("pi-spawn patch NOT applied to any of: " + found.join(", "));
-            console.log("pi-spawn patch applied:", patched.join(", "));
-          '
-
-      - name: Assert alpha-hub structured search parser applied (issue 167)
-        run: |
-          node -e '
-            const { execSync } = require("node:child_process");
-            const { existsSync, readFileSync } = require("node:fs");
-            const { join } = require("node:path");
-            const root = execSync("npm root -g").toString().trim();
-            const pkg = join(root, "@companion-ai", "feynman");
-            const candidates = [
-              join(pkg, "node_modules", "@companion-ai", "alpha-hub", "src", "lib", "index.js"),
-              join(pkg, ".feynman", "npm", "node_modules", "@companion-ai", "alpha-hub", "src", "lib", "index.js"),
-            ];
-            const found = candidates.filter((p) => existsSync(p));
-            if (found.length === 0) throw new Error("alpha-hub index.js not found under " + pkg);
-            const patched = found.filter((p) => readFileSync(p, "utf8").includes("parseStructuredSearchResults"));
-            if (patched.length !== found.length) {
-              throw new Error("structured search parser patch missing on: " + found.filter((p) => !patched.includes(p)).join(", "));
-            }
-            console.log("alpha-hub structured parser applied:", patched.join(", "));
-          '
+      - name: Pi RPC compatibility check
+        run: node "$(npm root -g)/@companion-ai/feynman/scripts/check-pi-rpc.mjs"
 
       - name: Configure model auth for live smokes
         if: env.HAS_OPENAI_KEY == 'true'
@@ -141,38 +106,11 @@ jobs:
           grep -q "CI_TEXT_OK" smoke-text.log
           echo "text mode smoke ok"
 
-      - name: Subagent spawn diagnostics
-        if: env.FEYNMAN_HOME != ''
-        run: |
-          node -e '
-            const { execSync } = require("node:child_process");
-            const { existsSync, readFileSync } = require("node:fs");
-            const { join } = require("node:path");
-            const root = execSync("npm root -g").toString().trim();
-            const pkg = join(root, "@companion-ai", "feynman");
-            const spawnPath = join(pkg, ".feynman", "npm", "node_modules", "pi-subagents", "src", "runs", "shared", "pi-spawn.ts");
-            const src = existsSync(spawnPath) ? readFileSync(spawnPath, "utf8") : "";
-            console.log("pi-spawn exists:", existsSync(spawnPath));
-            console.log("has FEYNMAN_PI_CLI_PATH:", src.includes("FEYNMAN_PI_CLI_PATH"));
-            console.log("has wrapperPiCliPath recovery:", src.includes("wrapperPiCliPath"));
-            console.log("has argv2 dep:", src.includes("argv2?: string;"));
-            for (const candidate of [
-              join(pkg, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js"),
-              join(pkg, ".feynman", "npm", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js"),
-              join(pkg, "dist", "pi", "pi-cli-wrapper.js"),
-            ]) console.log("exists:", existsSync(candidate), candidate);
-            const agentsPath = join(pkg, ".feynman", "npm", "node_modules", "pi-subagents", "src", "agents", "agents.ts");
-            const agents = existsSync(agentsPath) ? readFileSync(agentsPath, "utf8") : "";
-            const used = (agents.match(/loadAgentsFromDir\(userDir, "user"\)/g) ?? []).length;
-            const declared = (agents.match(/const userDir = /g) ?? []).length;
-            console.log("agents.ts userDir used:", used, "declared:", declared);
-          '
-
-      - name: Live subagent smoke (issue 172 end-to-end)
+      - name: Live native-session subagent smoke
         if: env.FEYNMAN_HOME != ''
         run: |
           feynman --mode json --prompt 'Use the subagent tool to run the "researcher" agent with the task: Reply with the single word PONG and stop. After the subagent returns, reply with exactly RESULT=<the single word the subagent returned> and nothing else.' > subagent.log 2>&1 || { tail -80 subagent.log; exit 1; }
-          for marker in "Cannot find module" "is not defined"; do
+          for marker in "Cannot find module" "is not defined" "requested unavailable child tools"; do
             if grep -q "$marker" subagent.log; then
               echo "subagent regression detected (matched: $marker):" >&2
               grep -n "$marker" subagent.log | head -3 >&2
@@ -198,9 +136,9 @@ jobs:
           - windows-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.18.0"
+          node-version: "24.21.0"
 
       - name: Install the published native bundle through the live Unix installer
         if: runner.os != 'Windows'
@@ -233,9 +171,7 @@ jobs:
           esac
           bundle="$install_root/app/feynman-$expected-$os-$arch"
           test -x "$bundle/feynman"
-          "$bundle/node/bin/node" \
-            "$bundle/app/scripts/verify-installed-runtime.mjs" \
-            "$bin"
+          "$bundle/node/bin/node" "$bundle/app/scripts/check-pi-rpc.mjs"
 
       - name: Install the published native bundle through the live Windows installer
         if: runner.os == 'Windows'
@@ -268,10 +204,9 @@ jobs:
           }
           $bundle = Join-Path $installRoot "feynman-$expected-win32-x64"
           & (Join-Path $bundle "node\node.exe") `
-            (Join-Path $bundle "app\scripts\verify-installed-runtime.mjs") `
-            $bin
+            (Join-Path $bundle "app\scripts\check-pi-rpc.mjs")
           if ($LASTEXITCODE -ne 0) {
-            throw "Installed Windows runtime verification failed."
+            throw "Installed Windows bundle failed the Pi RPC compatibility check."
           }
 
   release-candidate-pr:
@@ -282,8 +217,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
 
@@ -296,7 +231,7 @@ jobs:
           npm run typecheck
           npm run build
           npm run architecture:check
-          npm audit --omit=dev
+          node scripts/npm-audit.mjs
           (
             cd website
             npm ci
@@ -316,23 +251,19 @@ jobs:
           tarball="$RUNNER_TEMP/companion-ai-feynman-$(node -p "require('./package.json').version").tgz"
           test -s "$tarball"
           node scripts/verify-package-budget.mjs "$RUNNER_TEMP/pack.json" "$tarball"
-          npm audit --omit=dev --prefix .feynman/npm
 
           consumer="$RUNNER_TEMP/feynman-consumer"
           mkdir -p "$consumer"
           (cd "$consumer" && npm init -y >/dev/null)
           npm install --prefix "$consumer" --omit=dev --no-audit "$tarball"
-          npm audit --omit=dev --prefix "$consumer"
+          node scripts/npm-audit.mjs --prefix "$consumer"
 
           bin="$consumer/node_modules/.bin/feynman"
           test "$("$bin" --version | tail -1)" = "$(node -p "require('./package.json').version")"
           "$bin" --help >/dev/null
           HOME="$RUNNER_TEMP/feynman-home" FEYNMAN_HOME="$RUNNER_TEMP/feynman-home" "$bin" packages list
           HOME="$RUNNER_TEMP/feynman-home" FEYNMAN_HOME="$RUNNER_TEMP/feynman-home" "$bin" search status
-          node scripts/verify-stale-pi-upgrade.mjs "$bin"
-          node "$consumer/node_modules/@companion-ai/feynman/scripts/verify-package-artifact.mjs" \
-            "$consumer/node_modules/@companion-ai/feynman"
-          node "$consumer/node_modules/@companion-ai/feynman/scripts/verify-installed-runtime.mjs" "$bin"
+          node "$consumer/node_modules/@companion-ai/feynman/scripts/check-pi-rpc.mjs"
           test -z "$(git status --porcelain --untracked-files=all)"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -345,7 +276,7 @@ jobs:
     if: github.event_name == 'pull_request'
     needs: release-candidate-pr
     name: Candidate consumer (${{ matrix.os }}, Node ${{ matrix.node }})
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -353,20 +284,25 @@ jobs:
           - os: ubuntu-latest
             node: "22.22.0"
           - os: ubuntu-latest
-            node: "24.18.0"
+            node: "24.21.0"
           - os: ubuntu-latest
-            node: "25"
+            node: "26"
           - os: macos-14
-            node: "24.18.0"
+            node: "24.21.0"
           - os: windows-latest
-            node: "24.18.0"
+            node: "24.21.0"
           - os: windows-latest
-            node: "25"
+            node: "26"
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     steps:
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      # Only the audit script; these jobs test the packed tarball, not the source tree.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts/npm-audit.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -394,7 +330,7 @@ jobs:
           mkdir -p "$consumer"
           (cd "$consumer" && npm init -y >/dev/null)
           npm install --prefix "$consumer" --omit=dev --no-audit "$tarball"
-          npm audit --omit=dev --prefix "$consumer"
+          node scripts/npm-audit.mjs --prefix "$consumer"
           bin="$consumer/node_modules/.bin/feynman"
           if command -v cygpath >/dev/null 2>&1; then
             bin="$consumer/node_modules/.bin/feynman.cmd"
@@ -413,25 +349,12 @@ jobs:
           npm install --global --prefix "$global_prefix" --omit=dev --no-audit "$tarball"
           test "$("$global_bin" --version | tail -1)" = "$version"
           "$global_bin" --help >/dev/null
-          runtime_audit="$RUNNER_TEMP/feynman-runtime-audit"
-          mkdir -p "$runtime_audit"
-          runtime_archive="$consumer/node_modules/@companion-ai/feynman/.feynman/runtime-workspace.tgz"
-          if command -v cygpath >/dev/null 2>&1; then
-            runtime_archive=$(cygpath -u "$runtime_archive")
-            runtime_audit=$(cygpath -u "$runtime_audit")
-          fi
-          tar -xzf \
-            "$runtime_archive" \
-            -C "$runtime_audit"
-          npm audit --omit=dev --prefix "$runtime_audit/npm"
-          node "$consumer/node_modules/@companion-ai/feynman/scripts/verify-package-artifact.mjs" \
-            "$consumer/node_modules/@companion-ai/feynman"
-          node "$consumer/node_modules/@companion-ai/feynman/scripts/verify-installed-runtime.mjs" "$bin"
+          node "$consumer/node_modules/@companion-ai/feynman/scripts/check-pi-rpc.mjs"
           global_node_modules=$(npm root --global --prefix "$global_prefix")
           if command -v cygpath >/dev/null 2>&1; then
             global_node_modules=$(cygpath -u "$global_node_modules")
           fi
-          node "$global_node_modules/@companion-ai/feynman/scripts/verify-installed-runtime.mjs" "$global_bin"
+          node "$global_node_modules/@companion-ai/feynman/scripts/check-pi-rpc.mjs"
 
   windows-native-installer-pr:
     if: github.event_name == 'pull_request'
@@ -441,8 +364,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
 
@@ -478,10 +401,13 @@ jobs:
           $bundleRoot = Join-Path $smokeRoot "feynman-$version-win32-x64"
           $native = Join-Path $bundleRoot "feynman.cmd"
           $nativeNode = Join-Path $bundleRoot "node/node.exe"
-          $nativeVerifier = Join-Path $bundleRoot "app/scripts/verify-installed-runtime.mjs"
-          & $nativeNode $nativeVerifier $native
+          & $native --help | Select-Object -First 20
           if ($LASTEXITCODE -ne 0) {
-            throw "Windows native launcher failed installed-runtime verification: $LASTEXITCODE"
+            throw "Windows native launcher failed --help: $LASTEXITCODE"
+          }
+          & $nativeNode (Join-Path $bundleRoot "app/scripts/check-pi-rpc.mjs")
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows native bundle failed the Pi RPC compatibility check: $LASTEXITCODE"
           }
 
       - name: Install candidate with Windows PowerShell 5.1

@@ -19,13 +19,9 @@ ok()   { printf 'ok    %s\n' "$*"; }
 EXPECTED='FORK.md
 extensions/parallel-search/parallel.ts
 extensions/research-tools.ts
-extensions/fork/current-date.ts
 scripts/fork/check-fork-delta.sh
 scripts/fork/gen-models-json.mjs
-src/model/catalog.ts
 tests/parallel-search.test.ts
-tests/current-date-context.test.ts
-tests/pro-class-allowlist.test.ts
 .feynman/agents/researcher.md
 .feynman/agents/verifier.md'
 
@@ -73,39 +69,14 @@ else
 	bad "no upstream/main ref -> git remote add upstream https://github.com/companion-inc/feynman.git && git fetch upstream"
 fi
 
-note '--- 4. Pro-class allowlist patch survived ---'
-# A merge that takes upstream's src/model/catalog.ts wholesale silently removes
-# this, and DeepSeek-V4-Pro vanishes from `feynman model list` again.
-if grep -q 'PRO_CLASS_ALLOWLIST_DEFAULT' src/model/catalog.ts 2>/dev/null &&
-   grep -q 'proClassAllowlist()' src/model/catalog.ts 2>/dev/null; then
-	ok "src/model/catalog.ts still carries the allowlist patch"
+note "--- 4. parallel tools wired into research-tools.ts (children load it) ---"
+if grep -q "registerParallelTools(pi)" extensions/research-tools.ts 2>/dev/null; then
+	ok "research-tools.ts registers parallel_* tools"
 else
-	bad "src/model/catalog.ts LOST the Pro-class allowlist patch -> re-apply it (see FORK.md); tests/pro-class-allowlist.test.ts will also be failing"
+	bad "research-tools.ts no longer registers parallel_* -> subagents lose parallel tools"
 fi
 
-note '--- 5. subagent extension path is correct ---'
-# Child subagents do not inherit Feynman's local extensions, so researcher/verifier
-# declare subagentOnlyExtensions with an ABSOLUTE path. If the repo is ever moved or
-# cloned elsewhere, that path silently stops resolving and every research delegation
-# fails with "requested unavailable child tools".
-want_ext="$(pwd)/extensions/research-tools.ts"
-sub_ok=1
-for agent in .feynman/agents/researcher.md .feynman/agents/verifier.md; do
-	got=$(grep -m1 '^subagentOnlyExtensions:' "$agent" 2>/dev/null | sed 's/^subagentOnlyExtensions:[[:space:]]*//')
-	if [ -z "$got" ]; then
-		bad "$agent has no subagentOnlyExtensions -> subagent tool calls will fail"
-		sub_ok=0
-	elif [ "$got" != "$want_ext" ]; then
-		bad "$agent points at '$got' but this repo is at '$want_ext' -> update it"
-		sub_ok=0
-	elif [ ! -f "$got" ]; then
-		bad "$agent points at '$got' which does not exist"
-		sub_ok=0
-	fi
-done
-[ "$sub_ok" -eq 1 ] && ok "researcher + verifier load extensions/research-tools.ts in child sessions"
-
-note '--- 6. parallel-cli present ---'
+note '--- 5. parallel-cli present ---'
 if command -v parallel-cli >/dev/null 2>&1; then
 	ok "parallel-cli at $(command -v parallel-cli)"
 else

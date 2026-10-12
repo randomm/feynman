@@ -49,13 +49,12 @@ Before adding a command, prompt, tool, extension, dashboard, document page, or r
 
 - Feynman wraps Pi. Before changing telemetry, tools, extensions, runtime package setup, model/prompt handoff, or child-process env, read the installed Pi package version, `node_modules/@earendil-works/pi-coding-agent/docs/`, and the matching runtime source.
 - Before writing a local Pi extension or tool shim, search Pi package docs plus npm/GitHub for an existing Pi extension or plugin; use the existing package, patch it, or record why it fails before adding a Feynman-owned implementation.
-- Treat parent CLI wiring as incomplete until the actual Pi launch path is verified: check `src/pi/launch.ts`, `scripts/prepare-runtime-workspace.mjs`, package `pi.extensions`, and every extension file the launch command passes.
+- Treat parent CLI wiring as incomplete until the actual Pi launch path is verified: check `src/pi/launch.ts`, `src/pi/runtime.ts`, the package `pi` manifest, the `packages` entries `ensureFeynmanSettings` writes, and every extension those packages load. `node scripts/check-pi-rpc.mjs` boots the CLI in RPC mode and checks what loaded.
 - For observability changes, verify session/agent/tool lifecycle coverage inside Pi itself and keep prompts, tool arguments, paper text, and file paths out of emitted telemetry.
 
-## Workbench control plane
+## Docs parity
 
-- The workbench is a Pi-backed research control plane. For chat, session, project, or reference-product parity work, read Pi's docs/runtime and the reference app's live behavior before coding, then wire the UI to real Pi/Feynman sessions, messages, streaming or resume state, files, artifacts, execution/provenance, compute, skills/MCP, memory, and verification state before calling the surface functionally complete.
-- For user-visible workbench parity slices, completion includes public-facing docs parity: update `README.md`, `RELEASES.md`, `metadata/commands.mjs`, and the `website/` docs/pages when they describe the changed command, setup flow, workbench capability, connector, or runtime state. `CHANGELOG.md` and plan files are internal trackers only.
+- For user-visible changes, completion includes public-facing docs parity: update `README.md`, `RELEASES.md`, `metadata/commands.mjs`, and the `website/` docs/pages when they describe the changed command, setup flow, tool, or runtime state. `CHANGELOG.md` and plan files are internal trackers only.
 
 ## Output conventions
 
@@ -85,7 +84,7 @@ Never use generic names like `research.md`, `draft.md`, `brief.md`, or `summary.
 
 ## Workspace changelog
 
-- `CHANGELOG.md` is a lab notebook, not release notes.
+- `CHANGELOG.md` is a local, untracked lab notebook (ignored by git), not release notes. Release notes live in `RELEASES.md`.
 - Read `CHANGELOG.md` before resuming substantial work when it exists.
 - Append concise entries after meaningful progress, failed approaches, major verification results, or new blockers.
 - Each entry should identify the active slug or objective and end with the next recommended step.

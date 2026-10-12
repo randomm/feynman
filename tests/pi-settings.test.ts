@@ -1,65 +1,20 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
-import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
-
 import {
-	CORE_PACKAGE_SOURCES,
-	getOptionalPackagePresetSources,
-	isRemovedOptionalPackageTarget,
-	isOptionalPackagePresetSupported,
-	listOptionalPackagePresetInstallTargets,
 	listOptionalPackagePresets,
-	NATIVE_PACKAGE_SOURCES,
 	normalizeOptionalPackagePresetName,
-	resolvePackageUpdateSources,
-	shouldPruneLegacyDefaultPackages,
-	supportsNativePackageSources,
-} from "../src/pi/package-presets.js";
+	resolvePackageSource,
+} from "../src/pi/packages.js";
+import { BUNDLED_PI_PACKAGES, getFeynmanPackageSources } from "../src/pi/runtime.js";
 import { chooseRecommendedModel } from "../src/model/catalog.js";
-import { normalizeFeynmanSettings, normalizeThinkingLevel } from "../src/pi/settings.js";
+import { ensureFeynmanSettings, feynmanSubagentExtensions, normalizeThinkingLevel, readJson } from "../src/pi/settings.js";
 
-test("bundled settings disable the project theme copy while the synced agent theme stays enabled", async () => {
-	const root = mkdtempSync(join(tmpdir(), "feynman-settings-"));
-	const workingDir = join(root, "project");
-	const agentDir = join(root, "agent");
-	const themeJson = JSON.stringify({ name: "feynman", colors: {} }) + "\n";
-	mkdirSync(join(workingDir, ".feynman", "themes"), { recursive: true });
-	mkdirSync(join(agentDir, "themes"), { recursive: true });
-	writeFileSync(
-		join(workingDir, ".feynman", "settings.json"),
-		JSON.stringify({ themes: ["-themes/feynman.json"] }, null, 2) + "\n",
-		"utf8",
-	);
-	writeFileSync(join(workingDir, ".feynman", "themes", "feynman.json"), themeJson, "utf8");
-	writeFileSync(join(agentDir, "themes", "feynman.json"), themeJson, "utf8");
-
-	const settingsManager = SettingsManager.create(workingDir, agentDir, { projectTrusted: true });
-	const packageManager = new DefaultPackageManager({ cwd: workingDir, agentDir, settingsManager });
-	const resolved = await packageManager.resolve();
-
-	const feynmanThemeResources = resolved.themes
-		.filter((resource) => resource.path.endsWith(join("themes", "feynman.json")))
-		.map((resource) => ({
-			path: resource.path,
-			enabled: resource.enabled,
-			scope: resource.metadata.scope,
-			source: resource.metadata.source,
-		}));
-
-	assert.deepEqual(
-		feynmanThemeResources.find((resource) => resource.path === join(agentDir, "themes", "feynman.json")),
-		{ path: join(agentDir, "themes", "feynman.json"), enabled: true, scope: "user", source: "auto" },
-	);
-	assert.deepEqual(
-		feynmanThemeResources.find((resource) => resource.path === join(workingDir, ".feynman", "themes", "feynman.json")),
-		{ path: join(workingDir, ".feynman", "themes", "feynman.json"), enabled: false, scope: "project", source: "auto" },
-	);
-	assert.equal(feynmanThemeResources.length, 2);
-});
+const appRoot = process.cwd();
+const bundledSettingsPath = resolve(appRoot, ".feynman", "settings.json");
 
 test("normalizeThinkingLevel accepts the latest Pi thinking levels", () => {
 	assert.equal(normalizeThinkingLevel("off"), "off");
@@ -76,197 +31,244 @@ test("normalizeThinkingLevel rejects unknown values", () => {
 	assert.equal(normalizeThinkingLevel(undefined), undefined);
 });
 
-test("normalizeFeynmanSettings seeds the fast core package set", async () => {
-	const root = mkdtempSync(join(tmpdir(), "feynman-settings-"));
+test("first run writes the bundled defaults and loads Feynman plus its bundled Pi packages", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "feynman-settings-first-run-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const settingsPath = join(root, "settings.json");
-	const bundledSettingsPath = join(root, "bundled-settings.json");
-	const authPath = join(root, "auth.json");
+	writeFileSync(join(root, "auth.json"), "{}\n");
+	await ensureFeynmanSettings(settingsPath, bundledSettingsPath, appRoot, "high", join(root, "auth.json"));
 
-	writeFileSync(bundledSettingsPath, "{}\n", "utf8");
-	writeFileSync(authPath, "{}\n", "utf8");
-
-	await normalizeFeynmanSettings(settingsPath, bundledSettingsPath, "medium", authPath);
-
-	const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as { packages?: string[] };
-	assert.deepEqual(settings.packages, [...CORE_PACKAGE_SOURCES]);
+	const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+	const bundled = JSON.parse(readFileSync(bundledSettingsPath, "utf8"));
+	for (const [key, value] of Object.entries(bundled)) assert.deepEqual(settings[key], value);
+	assert.equal(settings.defaultThinkingLevel, "high");
+	assert.deepEqual(settings.packages, getFeynmanPackageSources(appRoot));
+	assert.equal(settings.packages[0], appRoot);
+	assert.equal(settings.packages.length, 1 + BUNDLED_PI_PACKAGES.length);
 });
 
-test("bundled settings and package-list defaults use the same current core package set", () => {
-	const bundledSettings = JSON.parse(
-		readFileSync(join(process.cwd(), ".feynman", "settings.json"), "utf8"),
-	) as { packages?: string[] };
-	assert.deepEqual(bundledSettings.packages, [...CORE_PACKAGE_SOURCES]);
-	assert.deepEqual(CORE_PACKAGE_SOURCES, [
-		"npm:@companion-ai/alpha-hub@0.1.3",
-		"npm:pi-subagents@0.40.0",
-		"npm:pi-btw@0.4.1",
-		"npm:pi-docparser@4.0.0",
-		"npm:pi-web-access@0.18.0",
-		"npm:pi-otel@0.1.0",
+test("later runs only add missing keys and leave an unchanged file alone", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "feynman-settings-missing-keys-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const settingsPath = join(root, "settings.json");
+	writeFileSync(join(root, "auth.json"), "{}\n");
+	writeFileSync(settingsPath, JSON.stringify({ theme: "dark", quietStartup: false, retry: { enabled: false } }));
+	await ensureFeynmanSettings(settingsPath, bundledSettingsPath, appRoot, "medium", join(root, "auth.json"));
+
+	const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+	assert.equal(settings.theme, "dark");
+	assert.equal(settings.quietStartup, false);
+	assert.deepEqual(settings.retry, { enabled: false });
+	assert.equal(settings.collapseChangelog, true);
+	assert.equal(settings.defaultThinkingLevel, "medium");
+
+	const before = readFileSync(settingsPath, "utf8");
+	const modifiedAt = statSync(settingsPath).mtimeMs;
+	await ensureFeynmanSettings(settingsPath, bundledSettingsPath, appRoot, "low", join(root, "auth.json"));
+	assert.equal(readFileSync(settingsPath, "utf8"), before);
+	assert.equal(statSync(settingsPath).mtimeMs, modifiedAt);
+});
+
+test("pinned core packages from older releases become the bundled packages; the retired session-search preset goes; custom packages stay", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "feynman-settings-legacy-packages-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const settingsPath = join(root, "settings.json");
+	const oldInstall = join(root, "old-install", "node_modules", "pi-subagents");
+	mkdirSync(oldInstall, { recursive: true });
+	writeFileSync(join(oldInstall, "package.json"), JSON.stringify({ name: "pi-subagents", version: "0.65.1" }));
+	writeFileSync(join(root, "auth.json"), "{}\n");
+	writeFileSync(settingsPath, JSON.stringify({
+		packages: [
+			"npm:@companion-ai/alpha-hub@0.1.6",
+			"npm:pi-subagents@0.65.1",
+			"npm:pi-btw@0.4.1",
+			"npm:pi-docparser@4.0.0",
+			{ source: "npm:pi-web-access@0.28.0", skills: [] },
+			"npm:pi-otel@0.1.0",
+			"npm:@samfp/pi-memory",
+			"npm:@kaiserlich-dev/pi-session-search",
+			oldInstall,
+			{ source: "git:github.com/example/custom@v1", prompts: [] },
+		],
+	}));
+	await ensureFeynmanSettings(settingsPath, bundledSettingsPath, appRoot, "medium", join(root, "auth.json"));
+
+	assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")).packages, [
+		...getFeynmanPackageSources(appRoot),
+		"npm:@samfp/pi-memory",
+		{ source: "git:github.com/example/custom@v1", prompts: [] },
 	]);
 });
 
-test("normalizeFeynmanSettings upgrades the 0.3.6 pinned core package set", async () => {
-	const root = mkdtempSync(join(tmpdir(), "feynman-settings-"));
+test("user-level ~/.agents definitions cannot replace Feynman's agents unless the user opts in", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "feynman-settings-agent-dirs-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const settingsPath = join(root, "settings.json");
-	const bundledSettingsPath = join(root, "bundled-settings.json");
-	const authPath = join(root, "auth.json");
+	writeFileSync(join(root, "auth.json"), "{}\n");
+	await ensureFeynmanSettings(settingsPath, bundledSettingsPath, appRoot, "medium", join(root, "auth.json"));
+	assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")).subagents, { agentExcludeDirs: ["~/.agents"], defaultSubagentOnlyExtensions: feynmanSubagentExtensions(appRoot) });
 
-	writeFileSync(
-		settingsPath,
-		JSON.stringify({
-			packages: [
-				"npm:@companion-ai/alpha-hub@0.1.3",
-				"npm:pi-subagents@0.37.2",
-				"npm:pi-btw@0.4.1",
-				"npm:pi-docparser@3.0.1",
-				"npm:pi-web-access@0.15.0",
-				"npm:pi-otel@0.1.0",
-			],
-		}, null, 2) + "\n",
-		"utf8",
-	);
-	writeFileSync(bundledSettingsPath, "{}\n", "utf8");
-	writeFileSync(authPath, "{}\n", "utf8");
-
-	await normalizeFeynmanSettings(settingsPath, bundledSettingsPath, "medium", authPath);
-
-	const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as { packages?: string[] };
-	assert.deepEqual(settings.packages, [...CORE_PACKAGE_SOURCES]);
+	writeFileSync(settingsPath, JSON.stringify({ subagents: { agentExcludeDirs: [], agentOverrides: { writer: { model: "x/y" } } } }));
+	await ensureFeynmanSettings(settingsPath, bundledSettingsPath, appRoot, "medium", join(root, "auth.json"));
+	assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")).subagents, { agentExcludeDirs: [], agentOverrides: { writer: { model: "x/y" } }, defaultSubagentOnlyExtensions: feynmanSubagentExtensions(appRoot) });
 });
 
-test("normalizeFeynmanSettings upgrades the 0.3.10 pinned core package set", async () => {
-	const root = mkdtempSync(join(tmpdir(), "feynman-settings-"));
+test("the researcher child extension path managed by older releases is removed", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "feynman-settings-researcher-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const settingsPath = join(root, "settings.json");
-	const bundledSettingsPath = join(root, "bundled-settings.json");
-	const authPath = join(root, "auth.json");
+	writeFileSync(join(root, "auth.json"), "{}\n");
+	writeFileSync(settingsPath, JSON.stringify({
+		subagents: { agentOverrides: {
+			researcher: { subagentOnlyExtensions: ["custom.ts", "/old/extensions/research-tools.ts"], _feynmanResearchToolsExtension: "/old/extensions/research-tools.ts" },
+			writer: { subagentOnlyExtensions: ["/old/extensions/research-tools.ts"] },
+		} },
+	}));
+	await ensureFeynmanSettings(settingsPath, bundledSettingsPath, appRoot, "medium", join(root, "auth.json"));
 
-	writeFileSync(
-		settingsPath,
-		JSON.stringify({
-			packages: [
-				"npm:@companion-ai/alpha-hub@0.1.3",
-				"npm:pi-subagents@0.38.0",
-				"npm:pi-btw@0.4.1",
-				"npm:pi-docparser@3.0.1",
-				"npm:pi-web-access@0.17.1",
-				"npm:pi-otel@0.1.0",
-			],
-		}, null, 2) + "\n",
-		"utf8",
-	);
-	writeFileSync(bundledSettingsPath, "{}\n", "utf8");
-	writeFileSync(authPath, "{}\n", "utf8");
-
-	await normalizeFeynmanSettings(settingsPath, bundledSettingsPath, "medium", authPath);
-
-	const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as { packages?: string[] };
-	assert.deepEqual(settings.packages, [...CORE_PACKAGE_SOURCES]);
+	assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")).subagents.agentOverrides, {
+		researcher: { subagentOnlyExtensions: ["custom.ts"] },
+		writer: { subagentOnlyExtensions: ["/old/extensions/research-tools.ts"] },
+	});
 });
 
-test("normalizeFeynmanSettings upgrades the 0.3.11 pinned core package set", async () => {
-	const root = mkdtempSync(join(tmpdir(), "feynman-settings-"));
-	const settingsPath = join(root, "settings.json");
-	const bundledSettingsPath = join(root, "bundled-settings.json");
-	const authPath = join(root, "auth.json");
-
-	writeFileSync(
-		settingsPath,
-		JSON.stringify({
-			packages: [
-				"npm:@companion-ai/alpha-hub@0.1.3",
-				"npm:pi-subagents@0.40.0",
-				"npm:pi-btw@0.4.1",
-				"npm:pi-docparser@3.0.1",
-				"npm:pi-web-access@0.17.1",
-				"npm:pi-otel@0.1.0",
-			],
-		}, null, 2) + "\n",
-		"utf8",
-	);
-	writeFileSync(bundledSettingsPath, "{}\n", "utf8");
-	writeFileSync(authPath, "{}\n", "utf8");
-
-	await normalizeFeynmanSettings(settingsPath, bundledSettingsPath, "medium", authPath);
-
-	const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as { packages?: string[] };
-	assert.deepEqual(settings.packages, [...CORE_PACKAGE_SOURCES]);
+test("subagent defaults follow settingsPath, not HOME, authPath, or the Pi environment", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "feynman-subagent-defaults-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const agentDir = join(root, "custom", "agent");
+	const decoyDir = join(root, "unrelated-agent");
+	mkdirSync(agentDir, { recursive: true });
+	mkdirSync(decoyDir);
+	const settingsPath = join(agentDir, "settings.json");
+	const authPath = join(decoyDir, "auth.json");
+	writeFileSync(authPath, "{}\n");
+	const keys = ["HOME", "PI_CODING_AGENT_DIR"] as const;
+	const previous = keys.map((key) => process.env[key]);
+	for (const key of keys) process.env[key] = decoyDir;
+	try {
+		await ensureFeynmanSettings(settingsPath, bundledSettingsPath, appRoot, "medium", authPath);
+	} finally {
+		keys.forEach((key, index) => {
+			if (previous[index] === undefined) delete process.env[key];
+			else process.env[key] = previous[index];
+		});
+	}
+	const configPath = join(agentDir, "extensions", "subagent", "config.json");
+	assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
+		missions: { enabled: false }, fleetView: false, asyncByDefault: true, singleRunOutputBaseDir: ".",
+	});
+	assert.equal(statSync(configPath).mode & 0o777, 0o600);
+	assert.equal(existsSync(join(decoyDir, "extensions")), false);
+	const before = readFileSync(configPath, "utf8");
+	const modifiedAt = statSync(configPath).mtimeMs;
+	await ensureFeynmanSettings(settingsPath, bundledSettingsPath, appRoot, "medium", authPath);
+	assert.equal(readFileSync(configPath, "utf8"), before);
+	assert.equal(statSync(configPath).mtimeMs, modifiedAt);
 });
 
-test("normalizeFeynmanSettings prunes the legacy slow default package set", async () => {
-	const root = mkdtempSync(join(tmpdir(), "feynman-settings-"));
-	const settingsPath = join(root, "settings.json");
-	const bundledSettingsPath = join(root, "bundled-settings.json");
-	const authPath = join(root, "auth.json");
-
-	writeFileSync(
-		settingsPath,
-		JSON.stringify(
-				{
-					packages: [
-						"npm:@companion-ai/alpha-hub",
-						"npm:pi-subagents",
-						"npm:pi-btw",
-						"npm:pi-docparser",
-						"npm:pi-web-access",
-						"npm:pi-otel",
-					"npm:pi-generative-ui",
-				],
-			},
-			null,
-			2,
-		) + "\n",
-		"utf8",
-	);
-	writeFileSync(bundledSettingsPath, "{}\n", "utf8");
-	writeFileSync(authPath, "{}\n", "utf8");
-
-	await normalizeFeynmanSettings(settingsPath, bundledSettingsPath, "medium", authPath);
-
-	const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as { packages?: string[] };
-	assert.deepEqual(settings.packages, [...CORE_PACKAGE_SOURCES]);
+test("subagent defaults preserve explicit custom values and complete config bytes", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "feynman-subagent-custom-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const configPath = join(root, "extensions", "subagent", "config.json");
+	mkdirSync(join(root, "extensions", "subagent"), { recursive: true });
+	const original = '{"missions":{"enabled":true,"globalIndex":false},"fleetView":true,"asyncByDefault":false,"singleRunOutputBaseDir":"~/research-out","maxSubagentDepth":1}\n';
+	writeFileSync(configPath, original, { mode: 0o640 });
+	writeFileSync(join(root, "auth.json"), "{}\n");
+	await ensureFeynmanSettings(join(root, "settings.json"), bundledSettingsPath, appRoot, "medium", join(root, "auth.json"));
+	assert.equal(readFileSync(configPath, "utf8"), original);
+	assert.equal(statSync(configPath).mode & 0o777, 0o640);
 });
 
-test("normalizeFeynmanSettings prunes the legacy Devkade telemetry default package", async () => {
-	const root = mkdtempSync(join(tmpdir(), "feynman-settings-"));
-	const settingsPath = join(root, "settings.json");
-	const bundledSettingsPath = join(root, "bundled-settings.json");
-	const authPath = join(root, "auth.json");
-
-	writeFileSync(
-		settingsPath,
-		JSON.stringify(
-			{
-				packages: [
-					...CORE_PACKAGE_SOURCES,
-					"npm:@devkade/pi-opentelemetry",
-				],
-			},
-			null,
-			2,
-		) + "\n",
-		"utf8",
-	);
-	writeFileSync(bundledSettingsPath, "{}\n", "utf8");
-	writeFileSync(authPath, "{}\n", "utf8");
-
-	await normalizeFeynmanSettings(settingsPath, bundledSettingsPath, "medium", authPath);
-
-	const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as { packages?: string[] };
-	assert.deepEqual(settings.packages, [...CORE_PACKAGE_SOURCES]);
+test("subagent defaults merge only missing fields while preserving nested config and false values", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "feynman-subagent-partial-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const configPath = join(root, "extensions", "subagent", "config.json");
+	mkdirSync(join(root, "extensions", "subagent"), { recursive: true });
+	writeFileSync(configPath, JSON.stringify({
+		missions: { directory: join(root, "custom-missions"), retainTerminal: 12 },
+		asyncByDefault: false, asyncWidget: true, custom: { nested: ["preserved"] },
+	}));
+	writeFileSync(join(root, "auth.json"), "{}\n");
+	await ensureFeynmanSettings(join(root, "settings.json"), bundledSettingsPath, appRoot, "medium", join(root, "auth.json"));
+	assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
+		missions: { directory: join(root, "custom-missions"), retainTerminal: 12, enabled: false },
+		asyncByDefault: false, asyncWidget: true, custom: { nested: ["preserved"] }, fleetView: false,
+		singleRunOutputBaseDir: ".",
+	});
 });
 
-test("normalizeFeynmanSettings seeds the newest OpenAI GPT default exposed by Pi", async () => {
+for (const invalid of [
+	"{", "null", "[]", "false", '"string"',
+	'{"missions":null}', '{"missions":[]}', '{"missions":false}',
+	'{"missions":{"enabled":"false"}}', '{"missions":{"enabled":null}}',
+	'{"fleetView":0}', '{"fleetView":null}', '{"asyncByDefault":"true"}', '{"asyncByDefault":null}',
+	'{"singleRunOutputBaseDir":1}',
+]) {
+	test(`subagent defaults reject invalid config without rewriting any settings: ${invalid}`, async (t) => {
+		const root = mkdtempSync(join(tmpdir(), "feynman-subagent-invalid-"));
+		t.after(() => rmSync(root, { recursive: true, force: true }));
+		const configPath = join(root, "extensions", "subagent", "config.json");
+		const settingsPath = join(root, "settings.json");
+		mkdirSync(join(root, "extensions", "subagent"), { recursive: true });
+		writeFileSync(configPath, invalid);
+		const settings = '{"subagents":{"agentOverrides":{"researcher":{"subagentOnlyExtensions":["custom.ts"]}}}}\n';
+		writeFileSync(settingsPath, settings);
+		await assert.rejects(
+			ensureFeynmanSettings(settingsPath, bundledSettingsPath, appRoot, "medium", join(root, "absent-auth.json")),
+			/Invalid subagent config/,
+		);
+		assert.equal(readFileSync(configPath, "utf8"), invalid);
+		assert.equal(readFileSync(settingsPath, "utf8"), settings);
+		assert.equal(existsSync(join(root, "absent-auth.json")), false);
+	});
+}
+
+test("invalid main settings fail closed before creating subagent defaults", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "feynman-settings-invalid-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const settingsPath = join(root, "settings.json");
+	writeFileSync(settingsPath, "{");
+	await assert.rejects(
+		ensureFeynmanSettings(settingsPath, bundledSettingsPath, appRoot, "medium", join(root, "absent-auth.json")),
+		/Invalid Feynman settings/,
+	);
+	assert.equal(readFileSync(settingsPath, "utf8"), "{");
+	assert.equal(existsSync(join(root, "extensions")), false);
+});
+
+test("settings saved with a UTF-8 byte-order mark still load and keep their values", async (t) => {
+	// Notepad and PowerShell 5.1 write UTF-8 with a BOM; Feynman refused to start on it.
+	const root = mkdtempSync(join(tmpdir(), "feynman-settings-bom-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const settingsPath = join(root, "settings.json");
+	writeFileSync(settingsPath, "\uFEFF" + JSON.stringify({ defaultProvider: "anthropic", defaultModel: "claude-opus-5-5", theme: "feynman" }));
+	assert.equal(readJson(settingsPath).defaultModel, "claude-opus-5-5");
+	await ensureFeynmanSettings(settingsPath, bundledSettingsPath, appRoot, "medium", join(root, "absent-auth.json"));
+	const saved = JSON.parse(readFileSync(settingsPath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
+	assert.equal(saved.defaultProvider, "anthropic");
+	assert.equal(saved.defaultModel, "claude-opus-5-5");
+});
+
+test("invalid settings name the JSON error", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "feynman-settings-syntax-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const settingsPath = join(root, "settings.json");
+	writeFileSync(settingsPath, '{ "theme": "feynman", }');
+	await assert.rejects(
+		ensureFeynmanSettings(settingsPath, bundledSettingsPath, appRoot, "medium", join(root, "absent-auth.json")),
+		/Invalid Feynman settings at .*settings\.json: .*JSON.*\. Fix the JSON or delete the file\. The file was not changed\./,
+	);
+});
+
+test("ensureFeynmanSettings seeds the newest OpenAI GPT default exposed by Pi", async () => {
 	const root = mkdtempSync(join(tmpdir(), "feynman-settings-"));
 	const settingsPath = join(root, "settings.json");
-	const bundledSettingsPath = join(root, "bundled-settings.json");
 	const authPath = join(root, "auth.json");
 
-	writeFileSync(bundledSettingsPath, "{}\n", "utf8");
 	writeFileSync(authPath, JSON.stringify({ openai: { type: "api_key", key: "openai-test-key" } }) + "\n", "utf8");
 	const recommendation = await chooseRecommendedModel(authPath);
 
-	await normalizeFeynmanSettings(settingsPath, bundledSettingsPath, "medium", authPath);
+	await ensureFeynmanSettings(settingsPath, bundledSettingsPath, appRoot, "medium", authPath);
 
 	const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as {
 		defaultProvider?: string;
@@ -275,139 +277,81 @@ test("normalizeFeynmanSettings seeds the newest OpenAI GPT default exposed by Pi
 	assert.equal(`${settings.defaultProvider}/${settings.defaultModel}`, recommendation?.spec);
 });
 
-test("normalizeFeynmanSettings replaces an unavailable stale default with the current default", async () => {
+test("ensureFeynmanSettings seeds OpenCode Go Kimi as the preferred OpenCode Go default", async () => {
 	const root = mkdtempSync(join(tmpdir(), "feynman-settings-"));
 	const settingsPath = join(root, "settings.json");
-	const bundledSettingsPath = join(root, "bundled-settings.json");
 	const authPath = join(root, "auth.json");
 
-	writeFileSync(
-		settingsPath,
-		JSON.stringify({ defaultProvider: "anthropic", defaultModel: "claude-opus-1" }, null, 2) + "\n",
-		"utf8",
-	);
-	writeFileSync(bundledSettingsPath, "{}\n", "utf8");
-	writeFileSync(authPath, JSON.stringify({ openai: { type: "api_key", key: "openai-test-key" } }) + "\n", "utf8");
-	const recommendation = await chooseRecommendedModel(authPath);
-
-	await normalizeFeynmanSettings(settingsPath, bundledSettingsPath, "medium", authPath);
-
-	const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as {
-		defaultProvider?: string;
-		defaultModel?: string;
-	};
-	assert.equal(`${settings.defaultProvider}/${settings.defaultModel}`, recommendation?.spec);
-});
-
-test("normalizeFeynmanSettings seeds OpenCode Go Kimi as the preferred OpenCode Go default", async () => {
-	const root = mkdtempSync(join(tmpdir(), "feynman-settings-"));
-	const settingsPath = join(root, "settings.json");
-	const bundledSettingsPath = join(root, "bundled-settings.json");
-	const authPath = join(root, "auth.json");
-
-	writeFileSync(bundledSettingsPath, "{}\n", "utf8");
 	writeFileSync(authPath, JSON.stringify({ "opencode-go": { type: "api_key", key: "opencode-test-key" } }) + "\n", "utf8");
 
-	await normalizeFeynmanSettings(settingsPath, bundledSettingsPath, "medium", authPath);
+	await ensureFeynmanSettings(settingsPath, bundledSettingsPath, appRoot, "medium", authPath);
 
 	const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as {
 		defaultProvider?: string;
 		defaultModel?: string;
 	};
 	assert.equal(settings.defaultProvider, "opencode-go");
-	assert.equal(settings.defaultModel, "kimi-k2.6");
+	assert.equal(settings.defaultModel, "kimi-k2.7-code");
 });
 
-test("optional package presets map friendly aliases", () => {
-	assert.deepEqual(getOptionalPackagePresetSources("memory"), ["npm:@samfp/pi-memory"]);
-	assert.deepEqual(getOptionalPackagePresetSources("hindsight"), ["npm:@luxusai/pi-hindsight"]);
-	assert.deepEqual(getOptionalPackagePresetSources("session-search", "darwin", "22.12.0"), ["npm:@kaiserlich-dev/pi-session-search"]);
-	assert.deepEqual(getOptionalPackagePresetSources("session-search", "darwin", "24.8.0"), undefined);
-	assert.deepEqual(getOptionalPackagePresetSources("ui", "darwin"), undefined);
-	assert.deepEqual(getOptionalPackagePresetSources("generative-ui", "darwin"), undefined);
-	assert.deepEqual(getOptionalPackagePresetSources("all-extras", "darwin", "22.12.0"), undefined);
-	assert.deepEqual(getOptionalPackagePresetSources("search"), undefined);
-	assert.equal(normalizeOptionalPackagePresetName("ui"), undefined);
+test("optional package presets map friendly names to Pi package sources", () => {
+	assert.equal(resolvePackageSource("memory"), "npm:@samfp/pi-memory");
+	assert.equal(resolvePackageSource("Hindsight"), "npm:@luxusai/pi-hindsight");
+	assert.equal(resolvePackageSource("session-search"), "session-search");
+	assert.equal(resolvePackageSource("npm:custom-package"), "npm:custom-package");
 	assert.equal(normalizeOptionalPackagePresetName("all-extras"), undefined);
-	assert.equal(isOptionalPackagePresetSupported("session-search", "darwin", "24.8.0"), false);
-	assert.deepEqual(listOptionalPackagePresets("linux", "24.8.0").map((preset) => preset.name), ["memory", "hindsight"]);
-	assert.deepEqual(listOptionalPackagePresetInstallTargets("linux", "24.8.0"), ["memory", "hindsight"]);
-	assert.equal(shouldPruneLegacyDefaultPackages(["npm:custom"]), false);
+	assert.deepEqual(listOptionalPackagePresets().map((preset) => preset.name), ["memory", "hindsight"]);
 });
 
-test("package update sources map core and optional aliases", () => {
-	assert.deepEqual(resolvePackageUpdateSources("pi-subagents"), ["npm:pi-subagents@0.40.0"]);
-	assert.deepEqual(resolvePackageUpdateSources("subagents"), ["npm:pi-subagents@0.40.0"]);
-	assert.deepEqual(resolvePackageUpdateSources("npm:pi-subagents"), ["npm:pi-subagents@0.40.0"]);
-	assert.deepEqual(resolvePackageUpdateSources("pi-web-access"), ["npm:pi-web-access@0.18.0"]);
-	assert.deepEqual(resolvePackageUpdateSources("alpha-hub"), ["npm:@companion-ai/alpha-hub@0.1.3"]);
-	assert.deepEqual(resolvePackageUpdateSources("npm:pi-subagents@0.37.2"), ["npm:pi-subagents@0.37.2"]);
-	assert.deepEqual(resolvePackageUpdateSources("hindsight"), ["npm:@luxusai/pi-hindsight"]);
-	assert.deepEqual(resolvePackageUpdateSources("pi-hindsight"), ["npm:@luxusai/pi-hindsight"]);
-	assert.deepEqual(resolvePackageUpdateSources("memory"), ["npm:@samfp/pi-memory"]);
-	assert.deepEqual(resolvePackageUpdateSources("pi-memory"), ["npm:@samfp/pi-memory"]);
-	assert.deepEqual(resolvePackageUpdateSources("session-search"), ["npm:@kaiserlich-dev/pi-session-search"]);
-	for (const removedTarget of ["ui", "generative-ui", "pi-generative-ui", "npm:pi-generative-ui", "all-extras"]) {
-		assert.equal(isRemovedOptionalPackageTarget(removedTarget), true);
-		assert.throws(
-			() => resolvePackageUpdateSources(removedTarget, "darwin"),
-			/Removed optional package target/,
-		);
-	}
-	assert.deepEqual(resolvePackageUpdateSources("npm:@samfp/pi-memory"), ["npm:@samfp/pi-memory"]);
-	assert.deepEqual(resolvePackageUpdateSources("custom-package"), ["custom-package"]);
-});
 
-test("supportsNativePackageSources disables sqlite-backed packages on Node 23+", () => {
-	assert.equal(supportsNativePackageSources("22.12.0"), true);
-	assert.equal(supportsNativePackageSources("23.0.0"), false);
-	assert.equal(supportsNativePackageSources("24.8.0"), false);
-});
-
-test("normalizeFeynmanSettings prunes legacy package defaults to the lean research core", async () => {
-	const root = mkdtempSync(join(tmpdir(), "feynman-settings-"));
+test("ensureFeynmanSettings drops the retry backoff older Feynman versions seeded", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "feynman-settings-retry-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const settingsPath = join(root, "settings.json");
-	const bundledSettingsPath = join(root, "bundled-settings.json");
 	const authPath = join(root, "auth.json");
+	writeFileSync(authPath, "{}\n");
+	writeFileSync(settingsPath, JSON.stringify({ retry: { maxRetries: 6, baseDelayMs: 5000 }, defaultProvider: "openai", defaultModel: "gpt-5.6-terra" }));
+	await ensureFeynmanSettings(settingsPath, resolve(".feynman", "settings.json"), process.cwd(), "medium", authPath);
+	assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).retry, undefined);
 
-	writeFileSync(
-		settingsPath,
-		JSON.stringify(
-			{
-				packages: [
-					...CORE_PACKAGE_SOURCES,
-					"npm:pi-markdown-preview",
-					"npm:@walterra/pi-charts",
-					"npm:pi-mermaid",
-					"npm:@aliou/pi-processes",
-					"npm:pi-zotero",
-					"npm:@kaiserlich-dev/pi-session-search",
-					"npm:pi-schedule-prompt",
-					"npm:@samfp/pi-memory",
-					"npm:@tmustier/pi-ralph-wiggum",
-				],
-			},
-			null,
-			2,
-		) + "\n",
-		"utf8",
-	);
-	writeFileSync(bundledSettingsPath, "{}\n", "utf8");
-	writeFileSync(authPath, "{}\n", "utf8");
+	writeFileSync(settingsPath, JSON.stringify({ retry: { maxRetries: 8 }, defaultProvider: "openai", defaultModel: "gpt-5.6-terra" }));
+	await ensureFeynmanSettings(settingsPath, resolve(".feynman", "settings.json"), process.cwd(), "medium", authPath);
+	assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")).retry, { maxRetries: 8 });
+});
 
-	const originalVersion = process.versions.node;
-	Object.defineProperty(process.versions, "node", { value: "24.0.0", configurable: true });
-	try {
-		await normalizeFeynmanSettings(settingsPath, bundledSettingsPath, "medium", authPath);
-	} finally {
-		Object.defineProperty(process.versions, "node", { value: originalVersion, configurable: true });
-	}
+test("concurrent Feynman starts share one subagent config instead of failing", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "feynman-subagent-race-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const settingsPath = join(root, "agent", "settings.json");
+	const authPath = join(root, "agent", "auth.json");
+	mkdirSync(join(root, "agent"), { recursive: true });
+	writeFileSync(authPath, "{}\n");
+	// Both calls read the missing config, then await model discovery before writing.
+	await Promise.all([
+		ensureFeynmanSettings(settingsPath, resolve(".feynman", "settings.json"), process.cwd(), "medium", authPath),
+		ensureFeynmanSettings(settingsPath, resolve(".feynman", "settings.json"), process.cwd(), "medium", authPath),
+	]);
+	assert.deepEqual(JSON.parse(readFileSync(join(root, "agent", "extensions", "subagent", "config.json"), "utf8")), {
+		missions: { enabled: false }, fleetView: false, asyncByDefault: true, singleRunOutputBaseDir: ".",
+	});
+});
 
-	const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as { packages?: string[] };
-	assert.deepEqual(settings.packages, [...CORE_PACKAGE_SOURCES]);
-	assert.equal((settings.packages as string[] | undefined)?.some((source) => source.startsWith("npm:pi-btw@")), true);
-	for (const source of NATIVE_PACKAGE_SOURCES) {
-		assert.equal((settings.packages as string[] | undefined)?.includes(source), false);
-	}
-	assert.equal((settings.packages as string[] | undefined)?.includes("npm:@samfp/pi-memory"), false);
+test("ensureFeynmanSettings gives every subagent Feynman's research and web tools", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "feynman-subagent-extensions-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const settingsPath = join(root, "agent", "settings.json");
+	const authPath = join(root, "agent", "auth.json");
+	mkdirSync(join(root, "agent"), { recursive: true });
+	writeFileSync(authPath, "{}\n");
+	const read = () => JSON.parse(readFileSync(settingsPath, "utf8")).subagents.defaultSubagentOnlyExtensions;
+	const expected = feynmanSubagentExtensions(process.cwd());
+	assert.deepEqual(expected, [join(process.cwd(), "extensions", "research-tools.ts"), join(process.cwd(), "node_modules", "pi-web-access")]);
+
+	writeFileSync(settingsPath, JSON.stringify({ subagents: { defaultSubagentOnlyExtensions: ["/old/feynman-0.5.1/extensions/research-tools.ts", "/old/feynman-0.5.1/node_modules/pi-web-access"] }, defaultProvider: "openai", defaultModel: "gpt-5.6-terra" }));
+	await ensureFeynmanSettings(settingsPath, resolve(".feynman", "settings.json"), process.cwd(), "medium", authPath);
+	assert.deepEqual(read(), expected);
+
+	writeFileSync(settingsPath, JSON.stringify({ subagents: { defaultSubagentOnlyExtensions: ["/mine/tool.ts"] }, defaultProvider: "openai", defaultModel: "gpt-5.6-terra" }));
+	await ensureFeynmanSettings(settingsPath, resolve(".feynman", "settings.json"), process.cwd(), "medium", authPath);
+	assert.deepEqual(read(), ["/mine/tool.ts"]);
 });

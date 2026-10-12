@@ -1,66 +1,23 @@
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
-import type { Tool, ToolCall } from "@earendil-works/pi-ai";
+import type { JsonObject, Tool, ToolCall } from "@earendil-works/pi-ai";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { registerAlphaTools } from "../extensions/research-tools/alpha.js";
-import { registerModelEndpointTools } from "../extensions/research-tools/model-endpoints.js";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const researchToolsRoot = join(repoRoot, "extensions", "research-tools");
-const coordinatedTypeboxVersion = "1.3.7";
-
-function readJson(path: string): Record<string, any> {
-	return JSON.parse(readFileSync(path, "utf8")) as Record<string, any>;
-}
-
-test("research extension source and direct locks use Pi's coordinated TypeBox package", () => {
-	const sourceFiles = readdirSync(researchToolsRoot)
-		.filter((name) => name.endsWith(".ts"))
-		.map((name) => join(researchToolsRoot, name));
-	const typeboxSources = sourceFiles.filter((path) => readFileSync(path, "utf8").includes('from "typebox"'));
-	const legacySources = sourceFiles.filter((path) => readFileSync(path, "utf8").includes("@sinclair/typebox"));
-
-	assert.deepEqual(
-		typeboxSources.map((path) => path.slice(researchToolsRoot.length + 1)).sort(),
-		[
-			"alpha.ts",
-			"chemistry-sketcher.ts",
-			"huggingface.ts",
-			"model-endpoints.ts",
-			"science-databases.ts",
-			"workbench-connectors.ts",
-			"workbench-context.ts",
-		],
-	);
-	assert.deepEqual(legacySources, []);
-
-	const manifest = readJson(join(repoRoot, "package.json"));
-	const rootLock = readJson(join(repoRoot, "package-lock.json"));
-	const runtimeLock = readJson(join(repoRoot, ".feynman", "runtime-package-lock.json"));
-
-	assert.equal(manifest.dependencies.typebox, coordinatedTypeboxVersion);
-	assert.equal(manifest.dependencies["@sinclair/typebox"], undefined);
-	assert.equal(rootLock.packages[""].dependencies.typebox, coordinatedTypeboxVersion);
-	assert.equal(rootLock.packages[""].dependencies["@sinclair/typebox"], undefined);
-	assert.equal(rootLock.packages["node_modules/typebox"].version, coordinatedTypeboxVersion);
-	assert.equal(rootLock.packages["node_modules/@sinclair/typebox"], undefined);
-	assert.equal(runtimeLock.packages[""].dependencies.typebox, coordinatedTypeboxVersion);
-	assert.equal(runtimeLock.packages["node_modules/typebox"].version, coordinatedTypeboxVersion);
-});
-
-test("Pi runtime validation rejects null alpha_get_paper sections without losing optional arrays", () => {
+test("Pi runtime validation omits null alpha_get_paper sections without losing optional arrays", () => {
 	const tools = new Map<string, Tool>();
-	registerAlphaTools({
-		registerTool(tool) {
-			tools.set(tool.name, tool);
+	const fakePi = {
+		registerTool(tool: Parameters<ExtensionAPI["registerTool"]>[0]) {
+			tools.set(tool.name, tool as unknown as Tool);
 		},
-	} as ExtensionAPI);
+		on() {
+			return () => {};
+		},
+	};
+	registerAlphaTools(fakePi as unknown as ExtensionAPI, true);
 
 	const tool = tools.get("alpha_get_paper");
 	assert.ok(tool);
@@ -72,7 +29,7 @@ test("Pi runtime validation rejects null alpha_get_paper sections without losing
 	assert.equal(providerSchema.properties?.sections?.type, "array");
 	assert.equal(providerSchema.properties?.sections?.uniqueItems, undefined);
 
-	const validate = (arguments_: Record<string, unknown>) =>
+	const validate = (arguments_: JsonObject) =>
 		validateToolArguments(tool, {
 			type: "toolCall",
 			id: "typebox-regression",
@@ -85,42 +42,21 @@ test("Pi runtime validation rejects null alpha_get_paper sections without losing
 		paper: "2401.00001",
 		sections: ["methodology", "results"],
 	});
+	assert.deepEqual(validate({ paper: "2401.00001", sections: null }), {
+		paper: "2401.00001",
+	});
 	assert.throws(
-		() => validate({ paper: "2401.00001", sections: null }),
+		() => validate({ paper: "2401.00001", sections: "methodology" }),
 		/Validation failed for tool "alpha_get_paper":[\s\S]*sections: must be array/,
 	);
 });
 
-test("Pi runtime validation rejects null AlphaFold2 databases without losing optional arrays", () => {
-	const tools = new Map<string, Tool>();
-	registerModelEndpointTools({
-		registerTool(tool) {
-			tools.set(tool.name, tool);
-		},
-	} as ExtensionAPI);
-
-	const tool = tools.get("feynman_model_endpoint_call");
-	assert.ok(tool);
-	const validate = (arguments_: Record<string, unknown>) =>
-		validateToolArguments(tool, {
-			type: "toolCall",
-			id: "typebox-model-endpoint-regression",
-			name: tool.name,
-			arguments: arguments_,
-		} satisfies ToolCall);
-	const required = {
-		provider: "nvidia-bionemo",
-		model: "alphafold2",
-		sequence: "MSTNPKPQR",
+test("without an alphaXiv account only the local annotation tools are registered", () => {
+	const names = (signedIn: boolean) => {
+		const registered: string[] = [];
+		registerAlphaTools({ registerTool: (tool: { name: string }) => registered.push(tool.name), on: () => () => {} } as unknown as ExtensionAPI, signedIn);
+		return registered.sort();
 	};
-
-	assert.deepEqual(validate(required), required);
-	assert.deepEqual(validate({ ...required, databases: ["uniref90", "mgnify"] }), {
-		...required,
-		databases: ["uniref90", "mgnify"],
-	});
-	assert.throws(
-		() => validate({ ...required, databases: null }),
-		/Validation failed for tool "feynman_model_endpoint_call":[\s\S]*databases: must be array/,
-	);
+	assert.deepEqual(names(false), ["alpha_annotate_paper", "alpha_list_annotations"]);
+	assert.deepEqual(names(true), ["alpha_annotate_paper", "alpha_ask_paper", "alpha_get_paper", "alpha_list_annotations", "alpha_read_code", "alpha_search"]);
 });

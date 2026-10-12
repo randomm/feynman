@@ -1,58 +1,46 @@
-// FORK-OWNED TEST. See FORK.md.
-//
-// Neither Pi nor Feynman puts the current date in the system prompt (verified by
-// capturing a real provider request: 38,311 chars, zero date references). The prompt
-// still tells the agent to research "latest/current/recent" topics, so the model
-// anchors on its training cutoff and silently discards newer sources. One observed
-// run rejected everything published after 2025.
-import test from "node:test";
 import assert from "node:assert/strict";
-import { currentDateContextText, registerCurrentDateContext } from "../extensions/fork/current-date.js";
+import test from "node:test";
 
-function fakePi() {
-	const handlers: Array<(event: any) => any> = [];
-	const pi = { on: (name: string, handler: any) => { if (name === "context") handlers.push(handler); } } as any;
-	return { pi, fire: (messages: any[]) => handlers[0]?.({ type: "context", messages }) };
-}
+import type {
+	BeforeAgentStartEvent,
+	BeforeAgentStartEventResult,
+	ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
 
-test("date text states the full current date unambiguously", () => {
-	const text = currentDateContextText(new Date("2026-08-12T09:00:00Z"));
-	assert.match(text, /2026-08-12/);
-	assert.match(text, /2026/);
+import {
+	buildCurrentDateResearchContext,
+	registerCurrentDateResearchContext,
+} from "../extensions/research-tools/current-date.js";
+
+test("current-date research context states the date and source-verification rules", () => {
+	const context = buildCurrentDateResearchContext(new Date(2026, 7, 12, 9));
+	assert.match(context, /current date is 2026-08-12/i);
+	assert.match(context, /verify against current sources/i);
+	assert.match(context, /Do not reject evidence only because its date is later than your training data/i);
 });
 
-test("date text tells the agent not to trust its training cutoff", () => {
-	const text = currentDateContextText(new Date("2026-08-12T09:00:00Z"));
-	assert.match(text, /training/i);
-});
+test("before_agent_start adds current-date context as a system-prompt section", () => {
+	let handler:
+		| ((event: BeforeAgentStartEvent) => BeforeAgentStartEventResult | void)
+		| undefined;
+	const pi = {
+		on(event: string, candidate: typeof handler) {
+			if (event === "before_agent_start") handler = candidate;
+		},
+	} as unknown as ExtensionAPI;
 
-test("handler appends the date context to the request messages", () => {
-	const { pi, fire } = fakePi();
-	registerCurrentDateContext(pi, () => new Date("2026-08-12T09:00:00Z"));
-	const result = fire([{ role: "user", content: "hi" }]);
-	const serialised = JSON.stringify(result.messages);
-	assert.match(serialised, /2026-08-12/);
-	assert.equal(result.messages.length, 2, "original message is kept, one context message added");
-});
-
-test("repeated requests do not accumulate duplicate date blocks", () => {
-	const { pi, fire } = fakePi();
-	registerCurrentDateContext(pi, () => new Date("2026-08-12T09:00:00Z"));
-	const first = fire([{ role: "user", content: "hi" }]);
-	const second = fire(first.messages);
-	// count opening tags only - each block contains both <marker> and </marker>
-	const count = JSON.stringify(second.messages).match(/<feynman-current-date>/g)?.length ?? 0;
-	assert.equal(count, 1, "exactly one date block regardless of how many times context is built");
-});
-
-test("a stale date block is refreshed rather than left wrong", () => {
-	const { pi, fire } = fakePi();
-	let now = new Date("2026-08-12T09:00:00Z");
-	registerCurrentDateContext(pi, () => now);
-	const first = fire([{ role: "user", content: "hi" }]);
-	now = new Date("2026-08-13T09:00:00Z");
-	const second = fire(first.messages);
-	const serialised = JSON.stringify(second.messages);
-	assert.match(serialised, /2026-08-13/);
-	assert.doesNotMatch(serialised, /2026-08-12/);
+	registerCurrentDateResearchContext(pi, () => new Date(2026, 7, 12, 9));
+	assert.ok(handler);
+	const event = {
+		type: "before_agent_start",
+		prompt: "Find the latest research.",
+		systemPrompt: "Base prompt.",
+		systemPromptOptions: {} as unknown as BeforeAgentStartEvent["systemPromptOptions"],
+	} satisfies BeforeAgentStartEvent;
+	const result = handler(event);
+	assert.equal(result?.systemPrompt, undefined);
+	assert.equal(
+		event.systemPromptOptions.sections.current_date,
+		buildCurrentDateResearchContext(new Date(2026, 7, 12, 9)),
+	);
 });

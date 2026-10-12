@@ -2,7 +2,9 @@ import {
 	askPaper,
 	annotatePaper,
 	clearPaperAnnotation,
+	disconnect,
 	getPaper,
+	isLoggedIn,
 	listPaperAnnotations,
 	readPaperCode,
 	searchPapers,
@@ -11,10 +13,37 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { extractPaperSections } from "./alpha-sections.js";
+import { searchArxiv } from "./science-database-arxiv.js";
+import { searchOpenAlex } from "./science-database-openalex.js";
 
 function formatText(value: unknown): string {
 	if (typeof value === "string") return value;
 	return JSON.stringify(value, null, 2);
+}
+
+// alphaXiv's API has changed without notice before; when a call fails, point
+// the model at the other paper sources instead of leaving it on a broken tool.
+const ARXIV_ID = /(?:^|arxiv\.org\/(?:abs|pdf)\/|alphaxiv\.org\/(?:abs|overview)\/)(\d{4}\.\d{4,5}(?:v\d+)?|[a-z-]+(?:\.[A-Z]{2})?\/\d{7}(?:v\d+)?)/i;
+
+// When alphaXiv does not answer (expired login, outage), answer from another
+// paper source and say so first, instead of failing the research step.
+async function withPaperFallback<T>(
+	run: () => Promise<T>,
+	fallback?: { source: string; run: () => Promise<Record<string, unknown>> },
+): Promise<T | Record<string, unknown>> {
+	try {
+		return await run();
+	} catch (error) {
+		const message = (error instanceof Error ? error.message : String(error)).replace("`alpha login`", "`feynman alpha login`");
+		if (fallback) {
+			try {
+				return { fallbackNote: `alphaXiv did not answer (${message}); these results are from ${fallback.source}.`, ...(await fallback.run()) };
+			} catch {}
+		}
+		throw new Error(
+			`${message}\nalphaXiv did not answer this call. Use feynman_science_database_search (source "arxiv" or "semanticscholar") or fetch_content on https://arxiv.org/abs/<id> instead.`,
+		);
+	}
 }
 
 // Pi converts Type.Array inputs before validating them, which would turn null into ["null"].
@@ -27,8 +56,18 @@ const paperSectionsSchema = Type.Unsafe<string[]>({
 	}),
 });
 
-export function registerAlphaTools(pi: ExtensionAPI): void {
-	pi.registerTool({
+export function registerAlphaTools(pi: ExtensionAPI, signedIn = isLoggedIn()): void {
+	// The alphaXiv MCP client keeps a connection open; close it so print and
+	// JSON runs can exit once the session ends.
+	pi.on("session_shutdown", async () => {
+		await disconnect();
+	});
+	// Search, paper, Q&A, and code tools need an alphaXiv account. Without one,
+	// every call failed, so leave them out and let the model use the other
+	// paper sources. Annotations are local and stay available.
+	const registerAccountTool: ExtensionAPI["registerTool"] = signedIn ? (tool) => pi.registerTool(tool) : () => {};
+
+	registerAccountTool({
 		name: "alpha_search",
 		label: "Alpha Search",
 		description:
@@ -40,12 +79,15 @@ export function registerAlphaTools(pi: ExtensionAPI): void {
 			),
 		}),
 		async execute(_toolCallId, params) {
-			const result = await searchPapers(params.query, params.mode?.trim() || "semantic");
+			const result = await withPaperFallback(() => searchPapers(params.query, params.mode?.trim() || "semantic"), {
+				source: "OpenAlex semantic search",
+				run: () => searchOpenAlex({ source: "openalex", query: `semantic: ${params.query}`, limit: 10 }),
+			});
 			return { content: [{ type: "text", text: formatText(result) }], details: result };
 		},
 	});
 
-	pi.registerTool({
+	registerAccountTool({
 		name: "alpha_get_paper",
 		label: "Alpha Get Paper",
 		description:
@@ -62,7 +104,14 @@ export function registerAlphaTools(pi: ExtensionAPI): void {
 			sections: Type.Optional(paperSectionsSchema),
 		}),
 		async execute(_toolCallId, params) {
-			const result = await getPaper(params.paper, { fullText: params.fullText });
+			const arxivId = ARXIV_ID.exec(params.paper.trim())?.[1];
+			const result = await withPaperFallback(() => getPaper(params.paper, { fullText: params.fullText }), arxivId ? {
+				source: "arXiv metadata and abstract (no full text or sections)",
+				run: () => searchArxiv({ query: arxivId }),
+			} : undefined);
+			if ("fallbackNote" in result) {
+				return { content: [{ type: "text", text: formatText(result) }], details: result };
+			}
 			const extracted = extractPaperSections(result.content, params.section, params.sections);
 			const filteredResult = extracted.requested.length
 				? {
@@ -76,16 +125,20 @@ export function registerAlphaTools(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.registerTool({
+	registerAccountTool({
 		name: "alpha_ask_paper",
 		label: "Alpha Ask Paper",
-		description: "Ask a targeted question about a paper. Uses AI to analyze the PDF and answer.",
+		description: "Ask a targeted question about an arXiv or alphaXiv paper. Uses AI to analyze the PDF and answer. DOI-only papers are not supported; read those with fetch_content on the open-access PDF or Europe PMC full text.",
 		parameters: Type.Object({
 			paper: Type.String({ description: "arXiv ID, arXiv URL, or alphaXiv URL." }),
 			question: Type.String({ description: "Question about the paper." }),
 		}),
 		async execute(_toolCallId, params) {
-			const result = await askPaper(params.paper, params.question);
+			const arxivId = ARXIV_ID.exec(params.paper.trim())?.[1];
+			const result = await withPaperFallback(() => askPaper(params.paper, params.question), arxivId ? {
+				source: "arXiv metadata and abstract; the question was not answered, so answer it from the abstract or read the full text with fetch_content on the arXiv PDF",
+				run: () => searchArxiv({ query: arxivId }),
+			} : undefined);
 			return { content: [{ type: "text", text: formatText(result) }], details: result };
 		},
 	});
@@ -120,7 +173,7 @@ export function registerAlphaTools(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.registerTool({
+	registerAccountTool({
 		name: "alpha_read_code",
 		label: "Alpha Read Code",
 		description: "Read files from a paper's GitHub repository. Use '/' for repo overview.",

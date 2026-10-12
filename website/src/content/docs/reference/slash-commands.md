@@ -5,58 +5,67 @@ section: Reference
 order: 2
 ---
 
-Slash commands are available inside the Feynman REPL. They map to research workflows, research-session utilities, and setup utilities. Type `/help` inside the REPL for Feynman's curated live command list.
+Slash commands are available inside the Feynman REPL. They map to research workflows, project utilities, and commands from the bundled Pi packages. Type `/help` inside the REPL for Feynman's grouped command list.
 
 ## Research workflows
 
 | Command | Description |
 | --- | --- |
 | `/deepresearch <topic>` | Run a thorough, source-heavy investigation and produce a research brief with inline citations |
-| `/lit <topic-or-lab>` | Run a structured literature review with consensus, disagreements, open questions, and lab/PI corpus mode |
-| `/review <artifact>` | Run an internal research review with severity-graded feedback and inline annotations |
-| `/audit <item>` | Compare a paper's claims against its public codebase for mismatches and reproducibility risks |
-| `/replicate <paper>` | Plan a replication workflow for a paper, claim, or benchmark; execute only after choosing an environment |
+| `/lit <topic-or-lab-or-author>` | Run a literature review on a topic, lab, PI, or author |
+| `/review <artifact>` | Run an internal research critique with likely objections, severity, and a concrete revision plan |
+| `/audit <item>` | Compare a paper's claims against its public codebase for mismatches, omissions, and reproducibility risks |
+| `/replicate <paper>` | Plan a replication workflow for a paper, claim, or benchmark; execute only after an explicit environment choice |
 | `/recipe <task-or-paper>` | Find ranked, implementable ML training recipes backed by papers, datasets, docs, and code |
-| `/compare <topic>` | Compare multiple sources and produce an agreement/disagreement matrix |
-| `/draft <topic>` | Generate a paper-style draft from research findings |
-| `/autoresearch <idea>` | Start a bounded research experiment loop that iteratively optimizes against a benchmark |
-| `/watch <topic>` | Create a research watch baseline and optionally schedule follow-up checks |
+| `/compare <topic>` | Compare multiple sources and produce a matrix of agreements, disagreements, and confidence |
+| `/draft <topic>` | Turn research findings into a paper-style draft |
+| `/autoresearch <idea>` | Run a bounded experiment loop against a benchmark, keeping what works |
+| `/summarize <source>` | Summarize a paper, report, README, local artifact, or PDF with the source kept on disk instead of in context |
 
-These are the primary commands you use during research runs. Workflow prompts can call specialized agents (researcher, reviewer, writer, verifier) through Pi's `subagent` tool when delegation helps; narrow tasks stay lead-owned. ML recipe and replication runs can inspect Hugging Face dataset metadata, repo files, and small Hub files when grounding implementation plans.
+Workflow prompts can call the bundled agents (researcher, reviewer, writer, verifier) through Pi's `subagent` tool when delegation helps; narrow tasks stay lead-owned.
 
 ## Project and session
 
 | Command | Description |
 | --- | --- |
 | `/log` | Write a durable session log with completed work, findings, open questions, and next steps |
-| `/jobs` | Inspect visible research-run process/scheduler state and durable watch or experiment artifacts |
 | `/help` | Show grouped Feynman commands and prefill the editor with a selected command |
-| `/feynman-model` | Open the non-Pro model picker for the main default model and per-subagent overrides |
-| `/init` | Bootstrap `AGENTS.md` and session-log folders for a new research project |
+| `/init` | Bootstrap `AGENTS.md` and session-log folders for a research project |
 | `/outputs` | Browse all research artifacts (papers, outputs, experiments, notes) |
-| `/btw <question>` | Ask a side question while the main research agent is busy and hand the result back when needed |
-| `/thinking [level]` | View the current model thinking level, open a model-aware picker, or set `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` directly |
-| `/search` | Search prior research-session transcripts for past research and findings |
+| `/tools` | Browse public research tools with their source and parameter summary |
+| `/service-tier` | View or set the provider service tier override for supported models |
 
-Session management commands help you organize ongoing work. The `/log` command is particularly useful at the end of a research session to capture what was accomplished and what remains.
+## Package commands
 
-The `/feynman-model` command opens an interactive picker that lets you either change the main non-Pro default model or assign a different non-Pro model to a bundled subagent like `researcher`, `reviewer`, `writer`, or `verifier`.
+| Command | Package | Description |
+| --- | --- | --- |
+| `/btw <question>` | `pi-btw` | Ask a side question while the main research agent is busy |
+| `/search` | `pi-web-access` | Browse stored web search results from the current session |
+| `/websearch [queries]` | `pi-web-access` | Open the search curator to run and review searches yourself |
+| `/curator [on\|off]` | `pi-web-access` | Toggle the search curator workflow |
+| `/subagents` | `pi-subagents` | Inspect configured agents |
+| `/run <agent> [task] [--bg] [--fork]` | `pi-subagents` | Run one agent |
+| `/hotkeys`, `/new`, `/quit` | Pi | Show keyboard shortcuts, start a new session, quit |
+
+## Research delegation
+
+The current runtime does not provide `/chain` or `/parallel` commands. Research workflows call `subagent` directly for one child, or write a workflow script for parallel or sequential work to `outputs/.plans/<slug>-workflow.js` and run it by calling `subagent` with that path. A file works with every model; an inline ```` ```js workflow ```` block with `workflow: true` fails when a model puts the block in its hidden reasoning instead of the reply.
+
+```js
+return await runs.all([
+  { key: "papers", agent: "researcher", task: "Read outputs/.plans/<slug>-papers.md.", output: "outputs/.drafts/<slug>-research-papers.md" },
+  { key: "web", agent: "researcher", task: "Read outputs/.plans/<slug>-web.md.", output: "outputs/.drafts/<slug>-research-web.md" },
+]);
+```
+
+```json
+{ "workflow": "./outputs/.plans/<slug>-workflow.js", "async": true, "globalConcurrencyLimit": 4 }
+```
+
+For sequential work, await `runs.run(key, {agent, task, output})` before starting the next step. Legacy top-level `tasks`, `chain`, and `parallel` inputs are rejected. `runs.all` returns an ordered array, including ordinary child failures; inspect each result's `ok` and returned output references.
+
+An async launch receipt is not completion: consume the result and verify child output paths before synthesis or dependent review. Ordinary background subagents notify their parent; `bg_wait` is for background work without a native completion notification.
 
 ## Running workflows from the CLI
 
-All research workflow slash commands can also be run directly from the command line:
-
-```bash
-feynman deepresearch "topic"
-feynman lit "topic"
-feynman review artifact.md
-feynman audit 2401.12345
-feynman replicate "claim"
-feynman recipe "fine-tune a small model for math reasoning"
-feynman compare "topic"
-feynman draft "topic"
-```
-
-This is equivalent to launching the REPL and typing the slash command. The CLI form is useful for scripting and automation.
-
-See [ML Training Recipe](/docs/workflows/recipe) for the `/recipe` workflow and [Hugging Face Hub](/docs/tools/hugging-face) for the dataset and repo inspection tools used by recipe and replication runs.
+Every research workflow can also be run from the command line, for example `feynman deepresearch "topic"`. See [CLI Commands](/docs/reference/cli-commands#workflow-commands).

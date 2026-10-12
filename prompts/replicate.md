@@ -4,17 +4,6 @@ args: <paper>
 section: Research Workflows
 topLevelCli: true
 ---
-## Tool Discipline (Read First)
-
-Tool names are literal. Use only tools visible in the current tool set.
-
-- Search with `web_search`; do not call `search_web`, `google_search`, `google:search`, `search_google`, or `WebSearch`.
-- Fetch URLs with `fetch_content`; do not call bare `fetch`, `WebFetch`, `read_url_content`, or pass an array as `url`. Use `urls` for multiple URLs when the tool supports it.
-- Use visible Feynman alpha tools such as `alpha_search` when present. For shell access, call `feynman alpha ...`; do not call the user's bare global `alpha` binary.
-- To ask the user a question, write plain chat text and wait for the next user message. Do not call `ask_user_question`, `ask_user`, `ask_followup_question`, or `user_choice`.
-- Do not use `Task` as an agent dispatcher. Use only the visible `subagent` tool when it exists.
-- If a tool returns `Tool not found` or `Invalid URL`, do not retry the same invalid call. Map to a canonical visible tool and valid arguments, or record the capability as blocked.
-
 Design a replication plan for: $@
 
 ## Workflow
@@ -26,8 +15,8 @@ Design a replication plan for: $@
    - **Local** — run in the current working directory
    - **Virtual environment** — create an isolated venv/conda env first
    - **Docker** — run experiment code inside an isolated Docker container
-   - **Modal** — run on Modal's serverless GPU infrastructure. Write a Modal-decorated Python script and execute with `modal run <script.py>`. Best for burst GPU jobs that don't need persistent state. Requires `modal` CLI (`pip install modal && modal setup`).
-   - **RunPod** — provision a GPU pod on RunPod and SSH in for execution. Use `runpodctl` to create pods, transfer files, and manage lifecycle. Best for long-running experiments or when you need SSH access and persistent storage. Requires `runpodctl` CLI and `RUNPOD_API_KEY`.
+   - **Modal** — only if the user has the `modal` CLI installed and set up: write a Modal-decorated Python script and run it with `modal run <script.py>`. Best for burst GPU jobs that don't need persistent state.
+   - **RunPod** — only if the user has the `runpodctl` CLI installed and `RUNPOD_API_KEY` set: provision a GPU pod, then SSH in to run and use `runpodctl` to transfer files and stop the pod. Best for long-running experiments or when you need SSH access and persistent storage.
    - **Plan only** — produce the replication plan without executing
 5. **Execute** — If the user chose an execution environment, implement and run the replication steps there. Save notes, scripts, raw outputs, and results to disk in a reproducible layout. Do not call the outcome replicated unless the planned checks actually passed.
 6. **Log** — For multi-step or resumable replication work, append concise entries to `CHANGELOG.md` after meaningful progress, failed attempts, major verification outcomes, and before stopping. Record the active objective, what changed, what was checked, and the next step.

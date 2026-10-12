@@ -6,6 +6,8 @@ import { resolve as resolvePath } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
+import { readPromptSpecs } from "../../metadata/commands.mjs";
+
 import {
 	APP_ROOT,
 	FEYNMAN_AGENT_LOGO,
@@ -161,9 +163,11 @@ function detectSystemResources(): SystemResources {
 
 type WorkflowInfo = { name: string; description: string };
 
-function getResearchWorkflows(pi: ExtensionAPI): WorkflowInfo[] {
+// Only Feynman's own workflows; other packages (pi-subagents) also ship prompt commands.
+export function getResearchWorkflows(pi: Pick<ExtensionAPI, "getCommands">, appRoot = APP_ROOT): WorkflowInfo[] {
+	const feynmanWorkflows = new Set(readPromptSpecs(appRoot).map((spec) => spec.name));
 	return pi.getCommands()
-		.filter((cmd) => cmd.source === "prompt")
+		.filter((cmd) => cmd.source === "prompt" && feynmanWorkflows.has(cmd.name))
 		.map((cmd) => ({ name: `/${cmd.name}`, description: cmd.description ?? "" }))
 		.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -306,7 +310,7 @@ export function installFeynmanHeader(
 					];
 
 						for (const wf of workflows) {
-							if (wf.name === "/jobs" || wf.name === "/log") continue;
+							if (wf.name === "/log") continue;
 							const desc = shortDescription(wf.description);
 							const descLines = wrapWords(desc, descW);
 							for (let index = 0; index < descLines.length; index += 1) {
@@ -338,7 +342,7 @@ export function installFeynmanHeader(
 					push(row(theme.fg("accent", theme.bold("Research Workflows"))));
 						const narrowDescW = Math.max(1, contentW - 17);
 						for (const wf of workflows) {
-							if (wf.name === "/jobs" || wf.name === "/log") continue;
+							if (wf.name === "/log") continue;
 							const desc = shortDescription(wf.description);
 							push(row(`${theme.fg("accent", padRight(wf.name, 16))} ${theme.fg("dim", truncateVisible(desc, narrowDescW))}`));
 						}

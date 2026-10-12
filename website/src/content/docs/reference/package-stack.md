@@ -5,48 +5,53 @@ section: Reference
 order: 3
 ---
 
-Feynman is built on the Pi runtime and uses curated Pi packages for its capabilities. Packages are managed through `feynman packages` commands and configured in `~/.feynman/agent/settings.json`.
+Feynman is built on stock Pi and uses curated Pi packages for its capabilities. Feynman itself is a Pi package: its `package.json` `pi` manifest declares its extension, prompts, skills, theme, and subagent definitions. Feynman launches Pi with `PI_CODING_AGENT_DIR=~/.feynman/agent` and lists itself and its core packages in `~/.feynman/agent/settings.json` as local-path packages, so subagents load the same tools as the main session.
 
-Feynman also ships a local research extension that registers project-specific tools such as AlphaXiv wrappers, Feynman commands, and read-only Hugging Face Hub inspection. Those extension tools are bundled with Feynman itself rather than installed as separate Pi packages. Pi runtime observability is provided by the bundled `pi-otel` package, pointed at PostHog AI Observability through trace-specific OTLP variables, and configured for metadata-only spans by default. CLI spans use PostHog distributed tracing and are queryable from `posthog.trace_spans`; Pi LLM/tool spans appear in AI Observability and as `$ai_*` events.
-
-This page follows Pi's upstream docs for [packages](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/packages.md), [extensions](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md), and [skills](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/skills.md). Feynman adds its own package presets and bundled research extension on top of that model.
+See Pi's upstream docs for [packages](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md), [extensions](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md), and [skills](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md).
 
 ## Core packages
 
-These are installed by default with every Feynman installation. They provide the foundation for research workflows while still letting Pi own the underlying runtime, RPC transport, provider model, and package loader.
+These are npm dependencies of Feynman, installed with it and loaded unmodified from its install directory.
 
 | Package | Purpose |
 | --- | --- |
-| `@companion-ai/alpha-hub` | Direct alphaXiv tools for paper and author workflows |
-| `pi-subagents` | Parallel agent spawning for literature gathering and task decomposition. Powers the multi-agent workflows |
-| `pi-btw` | Side conversations while the main research agent is busy, including `/btw` follow-ups and handoff back into the main thread |
-| `pi-docparser` | Parse PDFs, Office documents, spreadsheets, and images through bounded, isolated native workers |
-| `pi-web-access` | Multi-provider web search, raw and page-grounded retrieval, stored-page passage lookup, GitHub access, PDFs, and direct image/media retrieval |
-| `pi-otel` | OpenTelemetry spans for Pi sessions, model calls, turns, and tool usage, exported without prompt or tool payload content |
+| `pi-subagents` | The `subagent` tool, `/subagents`, and `/run`; powers delegated and parallel research runs |
+| `pi-web-access` | `web_search`, `source_check`, `fetch_content`, and `get_search_content` for web search and page, PDF, and GitHub retrieval |
+| `pi-docparser` | `document_parse`, `document_search`, and `document_screenshot` for local PDFs, Office documents, spreadsheets, and images |
+| `pi-btw` | `/btw` side conversations while the main research agent is busy |
+| `@companion-ai/alpha-hub` | alphaXiv client library behind Feynman's `alpha_*` tools and `feynman alpha` |
 
-These packages are updated together when you run `feynman update`. You do not need to install them individually.
+They update when you upgrade Feynman. You do not need to install them individually.
 
 ## Bundled research extension
 
-| Tool group | Purpose |
+Feynman's own extension registers these tools and commands:
+
+| Group | Contents |
 | --- | --- |
-| AlphaXiv tools | Search papers, fetch paper reports, ask paper questions, read linked code, and manage annotations |
-| Hugging Face Hub tools | Inspect dataset metadata, features, splits, access status, and small files from model, dataset, and Space repos |
-| Feynman commands | `/help`, `/outputs`, `/init`, `/feynman-model`, `/service-tier`, `/thinking`, and discovery helpers |
+| AlphaXiv tools | `alpha_search`, `alpha_get_paper`, `alpha_ask_paper`, `alpha_read_code`, `alpha_annotate_paper`, `alpha_list_annotations` |
+| Science database search | `feynman_science_database_search` over Semantic Scholar, OpenAlex, arXiv IDs, PubMed, Europe PMC, bioRxiv/medRxiv, and Crossref |
+| Hugging Face Hub tools | `hf_dataset_info`, `hf_repo_files`, `hf_repo_read_file` |
+| Commands | `/help`, `/init`, `/outputs`, `/tools`, `/service-tier` |
 
 ## Optional packages
 
-Install on demand with `feynman packages install <preset>`. These extend Feynman with capabilities that not every user needs.
+Install on demand with `feynman packages install <preset>`.
 
 | Package | Preset | Purpose |
 | --- | --- | --- |
-| `@samfp/pi-memory` | `memory` | Pi-managed preference and correction memory for research-session continuity |
-| `@luxusai/pi-hindsight` | `hindsight` | Hindsight-backed research-continuity memory. Requires a Hindsight server or Hindsight Cloud account |
-| `@kaiserlich-dev/pi-session-search` | `session-search` | Indexed recall for prior research-session transcripts. Available through Node.js 22.x while its sqlite dependency is native-bound |
+| `@samfp/pi-memory` | `memory` | Preference and correction memory across sessions |
+| `@luxusai/pi-hindsight` | `hindsight` | Hindsight-backed long-term memory. Requires a Hindsight server or Hindsight Cloud account |
+
+To search past Feynman sessions without a package, search the session files directly:
+
+```bash
+rg -n "protein folding" ~/.feynman/sessions
+```
 
 ## Installing and managing packages
 
-List supported optional research packages and their install status:
+List core packages and optional presets:
 
 ```bash
 feynman packages list
@@ -55,23 +60,25 @@ feynman packages list
 Install a specific optional preset:
 
 ```bash
-feynman packages install session-search
+feynman packages install memory
 ```
 
 ## Updating packages
 
-Reconcile all installed packages with their configured versions:
+Update the optional packages you installed, through Pi's own `pi update --extensions`:
 
 ```bash
 feynman update
 ```
 
-Update a specific package:
+Update one package, by preset name or Pi package source:
 
 ```bash
-feynman update pi-subagents
+feynman update memory
 ```
 
-Running `feynman update` without arguments updates unpinned packages to their current registry versions and repairs stale exact-pinned core packages to the versions shipped by Feynman. Semver ranges and registry tags remain unpinned selectors and are preserved during installation. Pass a specific package name to reconcile just that one. Updates are safe and preserve your configuration.
+Core packages are not touched by `feynman update` because they ship with Feynman; to update them, upgrade Feynman itself (rerun the installer from the [Installation guide](/docs/getting-started/installation), or `npm install -g @companion-ai/feynman@latest`).
 
-This command updates Pi packages inside Feynman's environment. To upgrade the standalone Feynman app itself, rerun the installer from the [Installation guide](/docs/getting-started/installation).
+## Runtime versions
+
+Feynman 0.5.39 runs Pi 1.1.0 with pi-subagents 0.77.0, pi-web-access 0.39.0, pi-docparser 4.0.0, pi-btw 0.8.0, and Alpha Hub 0.1.6 as ordinary npm dependencies, and does not modify any of them on disk. Every release is checked by booting the installed CLI in Pi RPC mode on Linux, macOS, and Windows.

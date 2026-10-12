@@ -1,72 +1,23 @@
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 
-import { trace, SpanStatusCode, type Attributes, type Span } from "@opentelemetry/api";
-import { logs, SeverityNumber } from "@opentelemetry/api-logs";
-import {
-	OTLPExporterBase,
-	createOtlpNetworkExportDelegate,
-	type IExporterTransport,
-} from "@opentelemetry/otlp-exporter-base";
-import { createOtlpHttpExporterMetrics } from "@opentelemetry/otlp-exporter-base/node-http";
-import {
-	JsonLogsSerializer,
-	LogsExporterMetricsHelper,
-	ProtobufTraceSerializer,
-	TraceExporterMetricsHelper,
-	type IExporterMetricsHelper,
-	type ISerializer,
-} from "@opentelemetry/otlp-transformer";
-import { resourceFromAttributes } from "@opentelemetry/resources";
-import {
-	BatchLogRecordProcessor,
-	LoggerProvider,
-	type ReadableLogRecord,
-} from "@opentelemetry/sdk-logs";
-import { BatchSpanProcessor, type ReadableSpan } from "@opentelemetry/sdk-trace-base";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import { PostHog, type PostHogOptions } from "posthog-node";
 
 import { getFeynmanHome, getFeynmanStateDir } from "../config/paths.js";
 
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com";
-export const DEFAULT_POSTHOG_PROJECT_ID = "479027";
-export const DEFAULT_POSTHOG_PROJECT_TOKEN = "phc_ApbFL3s7uL2wonxA3Cs2H2vt7BQLahzhSP7NPjJrsJSv";
+export const DEFAULT_POSTHOG_PROJECT_ID = "623906";
+export const DEFAULT_POSTHOG_PROJECT_TOKEN = "phc_owCZbr7c4mchCuVN5JXA6uBByjbT2kFVXSbmpUyAgEva";
 const TELEMETRY_STATE_FILE = "telemetry.json";
 const TELEMETRY_DISABLED_VALUES = new Set(["0", "false", "no", "off", "disabled"]);
 const TELEMETRY_KEY_PATTERN = /^[A-Za-z0-9_$./-]+$/;
-const CHILD_TELEMETRY_ENV_KEYS = [
-	"FEYNMAN_POSTHOG_HOST",
-	"FEYNMAN_POSTHOG_KEY",
-	"FEYNMAN_POSTHOG_PROJECT_ID",
-	"OTEL_EXPORTER_OTLP_ENDPOINT",
-	"OTEL_EXPORTER_OTLP_HEADERS",
-	"OTEL_EXPORTER_OTLP_PROTOCOL",
-	"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-	"OTEL_EXPORTER_OTLP_TRACES_HEADERS",
-	"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
-	"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-	"OTEL_EXPORTER_OTLP_LOGS_HEADERS",
-	"OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
-	"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-	"OTEL_EXPORTER_OTLP_METRICS_HEADERS",
-	"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
-	"OTEL_RESOURCE_ATTRIBUTES",
-	"OTEL_TRACES_EXPORTER",
-	"OTEL_LOGS_EXPORTER",
-	"OTEL_METRICS_EXPORTER",
-	"OTEL_LOG_LEVEL",
-	"PI_OTEL_DISABLED",
-	"PI_OTEL_CAPTURE_CONTENT",
-	"PI_OTEL_LOGS",
-	"PI_OTEL_METRICS",
-	"PI_OTEL_SERVICE_NAME",
-	"PI_OTEL_SERVICE_VERSION",
-	"OTEL_SERVICE_NAME",
-	"OTEL_SERVICE_VERSION",
-] as const;
+export const TELEMETRY_NOTICE = [
+	"Attention: Feynman collects anonymous usage telemetry: commands, workflows, tool names, models, token counts, and errors.",
+	"Errors include their message and stack trace, with your home folder shown as ~. It never sends prompts, model output, paper content, or tool arguments.",
+	"To opt out, set FEYNMAN_TELEMETRY=off. Learn more: https://www.feynman.is/docs/getting-started/configuration#telemetry",
+].join("\n");
 
 export type TelemetryPrimitive = string | number | boolean | null | undefined;
 export type TelemetryProperties = Record<string, TelemetryPrimitive>;
@@ -78,160 +29,49 @@ export type PostHogTelemetryConfig = {
 	projectToken: string;
 	distinctId: string;
 	appVersion?: string;
-	serviceName: string;
 };
 
 type TelemetryState = {
 	anonymousId?: string;
+	noticeShown?: boolean;
 };
 
 let posthogClient: PostHog | undefined;
-let tracerProvider: NodeTracerProvider | undefined;
-let loggerProvider: LoggerProvider | undefined;
 let activeConfig: PostHogTelemetryConfig | undefined;
 let telemetryInitialized = false;
 let telemetryStartWarningPrinted = false;
 let telemetryTransportFailed = false;
+let telemetryNoticeThisProcess: string | undefined;
 
 type PostHogFetch = NonNullable<PostHogOptions["fetch"]>;
-type TelemetryFetch = (
-	url: string | URL,
-	init?: RequestInit,
-) => Promise<Response>;
+// On a slow or filtered network a pending send made every command wait for
+// posthog-node's 10s deadline, and the library then printed its timeout to
+// stderr, which Windows PowerShell treats as a failure (#309). Give each send
+// a short budget and end it here, where it counts as a quiet transport failure.
+export const TELEMETRY_REQUEST_BUDGET_MS = 1500;
 
-export type TelemetryTransportCircuitBreaker = {
-	tryStart(): boolean;
-	completeSuccess(): void;
-	completeFailure(error: unknown): void;
-	isOpen(): boolean;
-};
-
-export function createTelemetryTransportCircuitBreaker(
-	onTransportFailure: (error: unknown) => void,
-): TelemetryTransportCircuitBreaker {
-	let circuitOpen = false;
-	return {
-		tryStart() {
-			return !circuitOpen;
-		},
-		completeSuccess() {},
-		completeFailure(error) {
-			if (circuitOpen) return;
-			circuitOpen = true;
-			onTransportFailure(error);
-		},
-		isOpen() {
-			return circuitOpen;
-		},
-	};
-}
-
-function successfulTelemetryDropResponse(): Response {
-	return new Response(null, { status: 204 });
-}
-
+/** One silent attempt per session: after the first failure, later requests are dropped. */
 export function createTelemetryCircuitBreakerFetch(
 	fetchImpl: PostHogFetch,
 	onTransportFailure: (error: unknown) => void,
-	circuit = createTelemetryTransportCircuitBreaker(onTransportFailure),
+	budgetMs = TELEMETRY_REQUEST_BUDGET_MS,
 ): PostHogFetch {
+	let open = false;
 	return async (url, options) => {
-		if (!circuit.tryStart()) {
-			return successfulTelemetryDropResponse();
-		}
-
-		try {
-			const response = await fetchImpl(url, options);
-			if (response.status >= 200 && response.status < 400) {
-				circuit.completeSuccess();
-				return response;
-			}
-
-			circuit.completeFailure(new Error(`PostHog transport returned HTTP ${response.status}`));
-			return successfulTelemetryDropResponse();
-		} catch (error) {
-			circuit.completeFailure(error);
-			return successfulTelemetryDropResponse();
-		}
-	};
-}
-
-export function createOneShotOtlpTransport(options: {
-	url: string;
-	headers: Record<string, string>;
-	contentType: string;
-	fetchImpl: TelemetryFetch;
-	circuit: TelemetryTransportCircuitBreaker;
-}): IExporterTransport {
-	return {
-		async send(data, timeoutMillis) {
-			if (!options.circuit.tryStart()) {
-				return { status: "success" };
-			}
-
-			const controller = new AbortController();
-			const timeout = setTimeout(() => controller.abort(), timeoutMillis);
-			timeout.unref?.();
+		if (!open) {
 			try {
-				const response = await options.fetchImpl(options.url, {
-					method: "POST",
-					headers: {
-						...options.headers,
-						"Content-Type": options.contentType,
-					},
-					body: Buffer.from(data),
-					signal: controller.signal,
-				});
-				if (response.status < 200 || response.status >= 400) {
-					throw new Error(`OTLP transport returned HTTP ${response.status}`);
-				}
-
-				options.circuit.completeSuccess();
-				return { status: "success" };
+				const budget = AbortSignal.timeout(budgetMs);
+				const signal = options.signal ? AbortSignal.any([options.signal, budget]) : budget;
+				const response = await fetchImpl(url, { ...options, signal });
+				if (response.status >= 200 && response.status < 400) return response;
+				throw new Error(`PostHog transport returned HTTP ${response.status}`);
 			} catch (error) {
-				// The exporter reports success after opening the shared circuit so
-				// OpenTelemetry processors do not relay optional telemetry failures
-				// through their global error handler.
-				options.circuit.completeFailure(error);
-				return { status: "success" };
-			} finally {
-				clearTimeout(timeout);
+				open = true;
+				onTransportFailure(error);
 			}
-		},
-		shutdown() {},
+		}
+		return new Response(null, { status: 204 });
 	};
-}
-
-function createOneShotOtlpExporter<Internal, ResponsePayload>(options: {
-	url: string;
-	headers: Record<string, string>;
-	contentType: string;
-	fetchImpl: TelemetryFetch;
-	circuit: TelemetryTransportCircuitBreaker;
-	timeoutMillis: number;
-	componentType: string;
-	serializer: ISerializer<Internal, ResponsePayload>;
-	metricsHelper: IExporterMetricsHelper<Internal>;
-}): OTLPExporterBase<Internal> {
-	const metrics = createOtlpHttpExporterMetrics(
-		options.componentType,
-		options.metricsHelper,
-		options.url,
-		undefined,
-	);
-	const transport = createOneShotOtlpTransport(options);
-	return new OTLPExporterBase(
-		createOtlpNetworkExportDelegate(
-			{
-				timeoutMillis: options.timeoutMillis,
-				concurrencyLimit: 1,
-				compression: "none",
-			},
-			options.serializer,
-			metrics,
-			transport,
-		),
-	);
 }
 
 function disableTelemetryAfterTransportFailure(error: unknown): void {
@@ -246,7 +86,7 @@ function disableTelemetryAfterTransportFailure(error: unknown): void {
 	}
 }
 
-function isTelemetryDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
+export function isTelemetryDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
 	const setting = env.FEYNMAN_TELEMETRY ?? env.FEYNMAN_POSTHOG_TELEMETRY;
 	return (setting !== undefined && TELEMETRY_DISABLED_VALUES.has(setting.trim().toLowerCase())) || env.DO_NOT_TRACK === "1";
 }
@@ -280,9 +120,44 @@ function getAnonymousDistinctId(home = getFeynmanHome()): string {
 	return anonymousId;
 }
 
+/**
+ * Returns the first-run telemetry notice once per Feynman home, and again for
+ * the rest of this process so a launch that clears the screen can reprint it.
+ * Only interactive terminals get it: scripts and CI (where Windows PowerShell
+ * treats any stderr as an error) never see it, and it stays pending for the
+ * first interactive run.
+ */
+export function telemetryFirstRunNotice(
+	home = getFeynmanHome(),
+	interactive = process.stderr.isTTY === true,
+): string | undefined {
+	if (telemetryNoticeThisProcess || !activeConfig) return telemetryNoticeThisProcess;
+	if (!interactive) return undefined;
+	const statePath = resolve(getFeynmanStateDir(home), TELEMETRY_STATE_FILE);
+	const state = readTelemetryState(statePath);
+	if (state.noticeShown) return undefined;
+	try {
+		mkdirSync(dirname(statePath), { recursive: true });
+		writeFileSync(statePath, JSON.stringify({ ...state, noticeShown: true }, null, 2) + "\n", "utf8");
+	} catch {
+		return undefined;
+	}
+	telemetryNoticeThisProcess = TELEMETRY_NOTICE;
+	return telemetryNoticeThisProcess;
+}
+
+/** Env the Pi child needs for the research extension to send under the same install id. */
+export function getPostHogChildEnv(): Record<string, string> {
+	if (!activeConfig) return {};
+	return {
+		FEYNMAN_POSTHOG_KEY: activeConfig.projectToken,
+		FEYNMAN_POSTHOG_HOST: activeConfig.host,
+		FEYNMAN_TELEMETRY_DISTINCT_ID: activeConfig.distinctId,
+	};
+}
+
 export function resolvePostHogTelemetryConfig(options: {
 	appVersion?: string;
-	serviceName?: string;
 	env?: NodeJS.ProcessEnv;
 	home?: string;
 } = {}): PostHogTelemetryConfig | undefined {
@@ -300,40 +175,9 @@ export function resolvePostHogTelemetryConfig(options: {
 		projectToken,
 		distinctId: env.FEYNMAN_TELEMETRY_DISTINCT_ID?.trim() || getAnonymousDistinctId(options.home),
 		appVersion: options.appVersion,
-		serviceName: options.serviceName ?? "feynman-cli",
 	};
 }
 
-export function buildPostHogOtelEnv(config: Pick<PostHogTelemetryConfig, "host" | "projectToken" | "projectId">, serviceName: string): NodeJS.ProcessEnv {
-	return {
-		...clearPostHogOtelEnv(),
-		FEYNMAN_POSTHOG_HOST: config.host,
-		FEYNMAN_POSTHOG_KEY: config.projectToken,
-		FEYNMAN_POSTHOG_PROJECT_ID: config.projectId,
-		// Used by the bundled pi-otel extension. Pi emits gen_ai.* metadata
-		// on its runtime spans, so route those spans to PostHog AI
-		// Observability and keep the generic OTLP endpoint unset.
-		OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: `${config.host}/i/v0/ai/otel`,
-		OTEL_EXPORTER_OTLP_TRACES_HEADERS: `Authorization=Bearer ${config.projectToken}`,
-		OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: "http/protobuf",
-		PI_OTEL_CAPTURE_CONTENT: "metadata_only",
-		PI_OTEL_LOGS: "0",
-		PI_OTEL_METRICS: "0",
-		OTEL_SERVICE_NAME: serviceName,
-		OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: `${config.host}/i/v1/logs`,
-		OTEL_EXPORTER_OTLP_LOGS_HEADERS: `Authorization=Bearer ${config.projectToken}`,
-	};
-}
-
-export function clearPostHogOtelEnv(): NodeJS.ProcessEnv {
-	return Object.fromEntries(CHILD_TELEMETRY_ENV_KEYS.map((key) => [key, undefined]));
-}
-
-export function getPostHogOtelEnv(serviceName: string, appVersion?: string): NodeJS.ProcessEnv {
-	const config = resolvePostHogTelemetryConfig({ serviceName, appVersion });
-	const cleared = clearPostHogOtelEnv();
-	return config ? { ...cleared, ...buildPostHogOtelEnv(config, serviceName) } : cleared;
-}
 
 function normalizeTelemetryKey(key: string): string | undefined {
 	const normalized = key
@@ -347,10 +191,23 @@ function normalizeTelemetryKey(key: string): string | undefined {
 	return normalized.slice(0, 80);
 }
 
-function normalizeTelemetryValue(value: TelemetryPrimitive): string | number | boolean | null | undefined {
+// Error text is sent as-is (home folder shown as ~) so failures can be debugged.
+const RAW_TEXT_KEYS = new Set(["error_message", "pi_stderr"]);
+const RAW_TEXT_LIMIT = 4000;
+
+export function redactTelemetryText(text: string, home = homedir()): string {
+	let redacted = text;
+	if (home) {
+		for (const variant of new Set([home, home.replace(/\\/g, "/")])) redacted = redacted.split(variant).join("~");
+	}
+	return redacted.length > RAW_TEXT_LIMIT ? `...${redacted.slice(-RAW_TEXT_LIMIT)}` : redacted;
+}
+
+function normalizeTelemetryValue(value: TelemetryPrimitive, raw = false): string | number | boolean | null | undefined {
 	if (value === undefined) return undefined;
 	if (value === null || typeof value === "boolean") return value;
 	if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+	if (raw) return value.trim() ? redactTelemetryText(value.trim()) : undefined;
 	const trimmed = value.replace(/\s+/g, " ").trim();
 	if (!trimmed) return undefined;
 	return trimmed.length > 240 ? `${trimmed.slice(0, 237)}...` : trimmed;
@@ -360,7 +217,7 @@ export function normalizeTelemetryProperties(properties: TelemetryProperties = {
 	const normalized: Record<string, string | number | boolean | null> = {};
 	for (const [key, value] of Object.entries(properties)) {
 		const normalizedKey = normalizeTelemetryKey(key);
-		const normalizedValue = normalizeTelemetryValue(value);
+		const normalizedValue = normalizeTelemetryValue(value, RAW_TEXT_KEYS.has(normalizedKey ?? ""));
 		if (!normalizedKey || normalizedValue === undefined) continue;
 		normalized[normalizedKey] = normalizedValue;
 	}
@@ -379,21 +236,6 @@ function baseTelemetryProperties(config: PostHogTelemetryConfig): Record<string,
 	});
 }
 
-function toOtelAttributes(properties: TelemetryProperties = {}): Attributes {
-	const normalized = normalizeTelemetryProperties(properties);
-	const attributes: Attributes = {};
-	for (const [key, value] of Object.entries(normalized)) {
-		if (value === null) continue;
-		attributes[key] = value;
-	}
-	return attributes;
-}
-
-export function stableTelemetryHash(value: string | undefined): string | undefined {
-	if (!value) return undefined;
-	return createHash("sha256").update(value).digest("hex").slice(0, 16);
-}
-
 function telemetryErrorName(error: unknown): string {
 	if (!(error instanceof Error)) return typeof error;
 	return /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(error.name) ? error.name : "Error";
@@ -403,24 +245,14 @@ export function telemetryErrorProperties(error: unknown): TelemetryProperties {
 	const message = error instanceof Error ? error.message : String(error);
 	return {
 		error_name: telemetryErrorName(error),
-		error_message_hash: stableTelemetryHash(message),
-	};
-}
-
-export function sanitizeTelemetryException(error: unknown): { name: string; message: string } {
-	const properties = telemetryErrorProperties(error);
-	return {
-		name: String(properties.error_name ?? "unknown"),
-		message: `error_message_hash:${properties.error_message_hash ?? "unknown"}`,
+		error_message: message,
 	};
 }
 
 export function initializePostHogTelemetry(options: {
 	appVersion?: string;
-	serviceName?: string;
 	home?: string;
 	posthogFetch?: PostHogFetch;
-	otlpFetch?: TelemetryFetch;
 } = {}): PostHogTelemetryConfig | undefined {
 	if (telemetryInitialized) return activeConfig;
 	telemetryInitialized = true;
@@ -430,94 +262,25 @@ export function initializePostHogTelemetry(options: {
 	activeConfig = config;
 	if (!config) return undefined;
 
-	try {
-		const resource = resourceFromAttributes({
-			[ATTR_SERVICE_NAME]: config.serviceName,
-			...(config.appVersion ? { [ATTR_SERVICE_VERSION]: config.appVersion } : {}),
-		});
-		const circuit = createTelemetryTransportCircuitBreaker(disableTelemetryAfterTransportFailure);
-		const defaultTelemetryFetch: TelemetryFetch = (url, fetchOptions) =>
-			fetch(url, fetchOptions);
-		const otlpFetch = options.otlpFetch ?? defaultTelemetryFetch;
-
-		tracerProvider = new NodeTracerProvider({
-			resource,
-			spanProcessors: [
-				new BatchSpanProcessor(
-					createOneShotOtlpExporter<ReadableSpan[], unknown>({
-						url: `${config.host}/i/v1/traces`,
-						headers: { Authorization: `Bearer ${config.projectToken}` },
-						contentType: "application/x-protobuf",
-						fetchImpl: otlpFetch,
-						circuit,
-						timeoutMillis: 750,
-						componentType: "otlp_http_span_exporter",
-						serializer: ProtobufTraceSerializer,
-						metricsHelper: TraceExporterMetricsHelper,
-					}),
-					{ scheduledDelayMillis: 250, exportTimeoutMillis: 3000 },
-				),
-			],
-		});
-		tracerProvider.register();
-
-		loggerProvider = new LoggerProvider({
-			resource,
-			processors: [
-				new BatchLogRecordProcessor({
-					exporter: createOneShotOtlpExporter<ReadableLogRecord[], unknown>({
-						url: `${config.host}/i/v1/logs`,
-						headers: { Authorization: `Bearer ${config.projectToken}` },
-						contentType: "application/json",
-						fetchImpl: otlpFetch,
-						circuit,
-						timeoutMillis: 750,
-						componentType: "otlp_http_log_exporter",
-						serializer: JsonLogsSerializer,
-						metricsHelper: LogsExporterMetricsHelper,
-					}),
-					scheduledDelayMillis: 250,
-					exportTimeoutMillis: 3000,
-				}),
-			],
-		});
-		logs.setGlobalLoggerProvider(loggerProvider);
-
-		const defaultPostHogFetch: PostHogFetch = (url, fetchOptions) =>
-			fetch(url, fetchOptions as RequestInit);
-		posthogClient = new PostHog(config.projectToken, {
-			host: config.host,
-			flushAt: 1,
-			flushInterval: 0,
-			isServer: false,
-			disableGeoip: true,
-			fetchRetryCount: 0,
-			fetch: createTelemetryCircuitBreakerFetch(
-				options.posthogFetch ?? defaultPostHogFetch,
-				disableTelemetryAfterTransportFailure,
-				circuit,
-			),
-		});
-		posthogClient.on("error", () => {
-			if (process.env.FEYNMAN_DEBUG === "1" && !telemetryStartWarningPrinted) {
-				telemetryStartWarningPrinted = true;
-				process.stderr.write("[feynman] PostHog telemetry transport reported an error.\n");
-			}
-		});
-		return config;
-	} catch (error) {
+	posthogClient = new PostHog(config.projectToken, {
+		host: config.host,
+		flushAt: 1,
+		flushInterval: 0,
+		isServer: false,
+		disableGeoip: true,
+		fetchRetryCount: 0,
+		fetch: createTelemetryCircuitBreakerFetch(
+			options.posthogFetch ?? ((url, fetchOptions) => fetch(url, fetchOptions as RequestInit)),
+			disableTelemetryAfterTransportFailure,
+		),
+	});
+	posthogClient.on("error", () => {
 		if (process.env.FEYNMAN_DEBUG === "1" && !telemetryStartWarningPrinted) {
 			telemetryStartWarningPrinted = true;
-			process.stderr.write(
-				`[feynman] PostHog telemetry disabled after initialization failed (${error instanceof Error ? error.message : "unknown error"}).\n`,
-			);
+			process.stderr.write("[feynman] PostHog telemetry transport reported an error.\n");
 		}
-		activeConfig = undefined;
-		posthogClient = undefined;
-		tracerProvider = undefined;
-		loggerProvider = undefined;
-		return undefined;
-	}
+	});
+	return config;
 }
 
 export function captureTelemetryEvent(event: string, properties: TelemetryProperties = {}): void {
@@ -529,6 +292,20 @@ export function captureTelemetryEvent(event: string, properties: TelemetryProper
 			...baseTelemetryProperties(activeConfig),
 			...normalizeTelemetryProperties(properties),
 		},
+	});
+}
+
+/** Send an error with its stack trace to PostHog error tracking. */
+export async function captureTelemetryException(error: unknown, properties: TelemetryProperties = {}): Promise<void> {
+	if (!activeConfig || !posthogClient) return;
+	const source = error instanceof Error ? error : new Error(String(error));
+	const redacted = new Error(redactTelemetryText(source.message));
+	redacted.name = source.name;
+	redacted.stack = source.stack ? redactTelemetryText(source.stack) : undefined;
+	// The immediate variant is awaited, so the event is sent before the CLI exits.
+	await posthogClient.captureExceptionImmediate(redacted, activeConfig.distinctId, {
+		...baseTelemetryProperties(activeConfig),
+		...normalizeTelemetryProperties(properties),
 	});
 }
 
@@ -544,97 +321,16 @@ export async function captureTelemetryEventImmediate(event: string, properties: 
 	});
 }
 
-export function emitTelemetryLog(
-	severityText: "trace" | "debug" | "info" | "warn" | "error",
-	body: string,
-	properties: TelemetryProperties = {},
-): void {
-	if (!activeConfig || !loggerProvider) return;
-	const severityNumber = severityText === "error"
-		? SeverityNumber.ERROR
-		: severityText === "warn"
-			? SeverityNumber.WARN
-			: severityText === "debug"
-				? SeverityNumber.DEBUG
-				: severityText === "trace"
-					? SeverityNumber.TRACE
-					: SeverityNumber.INFO;
-	logs.getLogger("feynman").emit({
-		severityText,
-		severityNumber,
-		body,
-		attributes: {
-			...toOtelAttributes(baseTelemetryProperties(activeConfig)),
-			...toOtelAttributes(properties),
-		},
-	});
-}
-
-export type ActiveTelemetrySpan = {
-	setAttributes(properties: TelemetryProperties): void;
-	recordException(error: unknown): void;
-	end(status?: "ok" | "error", properties?: TelemetryProperties): void;
-};
-
-function createNoopSpan(): ActiveTelemetrySpan {
-	return {
-		setAttributes() {},
-		recordException() {},
-		end() {},
-	};
-}
-
-export function startTelemetrySpan(name: string, properties: TelemetryProperties = {}): ActiveTelemetrySpan {
-	if (!activeConfig || !tracerProvider) return createNoopSpan();
-	const span: Span = trace.getTracer("feynman").startSpan(name, {
-		attributes: {
-			...toOtelAttributes(baseTelemetryProperties(activeConfig)),
-			...toOtelAttributes(properties),
-		},
-	});
-	let ended = false;
-	return {
-		setAttributes(nextProperties) {
-			if (ended) return;
-			span.setAttributes(toOtelAttributes(nextProperties));
-		},
-		recordException(error) {
-			if (ended) return;
-			span.recordException(sanitizeTelemetryException(error));
-			span.setAttributes(toOtelAttributes(telemetryErrorProperties(error)));
-		},
-		end(status = "ok", nextProperties = {}) {
-			if (ended) return;
-			ended = true;
-			if (Object.keys(nextProperties).length > 0) {
-				span.setAttributes(toOtelAttributes(nextProperties));
-			}
-			if (status === "error") {
-				span.setStatus({ code: SpanStatusCode.ERROR });
-			} else {
-				span.setStatus({ code: SpanStatusCode.OK });
-			}
-			span.end();
-		},
-	};
-}
-
 export async function shutdownPostHogTelemetry(): Promise<void> {
 	const client = posthogClient;
-	const traces = tracerProvider;
-	const loggers = loggerProvider;
 	posthogClient = undefined;
-	tracerProvider = undefined;
-	loggerProvider = undefined;
 	activeConfig = undefined;
 	telemetryInitialized = false;
 	telemetryTransportFailed = false;
-
-	await Promise.allSettled([
-		client?.shutdown(3000),
-		traces?.shutdown(),
-		loggers?.shutdown(),
-	]);
+	telemetryNoticeThisProcess = undefined;
+	try {
+		await client?.shutdown(3000);
+	} catch {}
 }
 
 function flagValue(args: string[], flag: string): string | undefined {
@@ -645,13 +341,6 @@ function flagValue(args: string[], flag: string): string | undefined {
 		if (arg.startsWith(prefix)) return arg.slice(prefix.length);
 	}
 	return undefined;
-}
-
-function safeIntegerFlagValue(args: string[], flag: string): number | undefined {
-	const value = flagValue(args, flag);
-	if (value === undefined || !/^\d+$/.test(value.trim())) return undefined;
-	const numeric = Number(value);
-	return Number.isSafeInteger(numeric) ? numeric : undefined;
 }
 
 function safeEnumFlagValue<T extends string>(args: string[], flag: string, allowed: readonly T[]): T | undefined {
@@ -668,19 +357,9 @@ const FLAGS_WITH_VALUES = new Set([
 	"--cwd",
 	"--mode",
 	"--model",
-	"--limit",
-	"--expand-citations",
-	"--full-text-top",
-	"--critique-top",
-	"--synthesis-top",
-	"--synthesis-model",
-	"--output-dir",
-	"--preference-file",
-	"--reproduction-notes",
 	"--prompt",
 	"--service-tier",
 	"--session-dir",
-	"--source-fixture",
 	"--tier1-threshold",
 	"--tier2-threshold",
 	"--thinking",
@@ -713,8 +392,6 @@ const DEFAULT_COMMAND_NAMES = new Set([
 	"help",
 	"model",
 	"packages",
-	"paper",
-	"rank",
 	"search",
 	"setup",
 	"status",
@@ -745,7 +422,6 @@ export function getCliTelemetryMetadata(args: string[], options: { knownCommands
 	const subcommand = positionals[1] && SAFE_SUBCOMMANDS[command]?.has(positionals[1])
 		? positionals[1]
 		: undefined;
-	const isRankCommand = command === "rank";
 
 	return {
 		command,
@@ -755,16 +431,5 @@ export function getCliTelemetryMetadata(args: string[], options: { knownCommands
 		has_model_override: Boolean(flagValue(args, "--model")),
 		has_service_tier_override: Boolean(flagValue(args, "--service-tier")),
 		new_session: hasFlag(args, "--new-session"),
-		json: hasFlag(args, "--json"),
-		synthesize: isRankCommand ? hasFlag(args, "--synthesize") : undefined,
-		source_fixture: Boolean(flagValue(args, "--source-fixture")),
-		preference_file: Boolean(flagValue(args, "--preference-file")),
-		reproduction_notes: Boolean(flagValue(args, "--reproduction-notes")),
-		rank_topic_provided: isRankCommand && positionals.length > 1,
-		rank_limit: isRankCommand ? safeIntegerFlagValue(args, "--limit") : undefined,
-		rank_expand_citations: isRankCommand ? safeIntegerFlagValue(args, "--expand-citations") : undefined,
-		rank_full_text_top: isRankCommand ? safeIntegerFlagValue(args, "--full-text-top") : undefined,
-		rank_critique_top: isRankCommand ? safeIntegerFlagValue(args, "--critique-top") : undefined,
-		rank_synthesis_top: isRankCommand ? safeIntegerFlagValue(args, "--synthesis-top") : undefined,
 	};
 }

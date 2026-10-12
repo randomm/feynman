@@ -4,17 +4,6 @@ args: <source> [--window-size <chars>] [--overlap <chars>] [--tier1-threshold <c
 section: Research Workflows
 topLevelCli: true
 ---
-## Tool Discipline (Read First)
-
-Tool names are literal. Use only tools visible in the current tool set.
-
-- Search with `web_search`; do not call `search_web`, `google_search`, `google:search`, `search_google`, or `WebSearch`.
-- Fetch URLs with `fetch_content`; do not call bare `fetch`, `WebFetch`, `read_url_content`, or pass an array as `url`. Use `urls` for multiple URLs when the tool supports it.
-- Use visible Feynman alpha tools such as `alpha_search` when present. For shell access, call `feynman alpha ...`; do not call the user's bare global `alpha` binary.
-- To ask the user a question, write plain chat text and wait for the next user message. Do not call `ask_user_question`, `ask_user`, `ask_followup_question`, or `user_choice`.
-- Do not use `Task` as an agent dispatcher. Use only the visible `subagent` tool when it exists.
-- If a tool returns `Tool not found` or `Invalid URL`, do not retry the same invalid call. Map to a canonical visible tool and valid arguments, or record the capability as blocked.
-
 Summarize the following research source: $@
 
 Derive a short slug from the source filename or URL domain (lowercase, hyphens, no filler words, ≤5 words — e.g. `attention-is-all-you-need`). Use this slug for all files in this run.
@@ -27,15 +16,12 @@ Tier 1 (below the Tier-1 threshold) is a deliberate exception: direct injection 
 
 ## Runtime knobs (context-window controls)
 
-Support both inline flags and environment variables so users can tune context-window behavior per run or globally.
-
-- `--window-size <chars>` or `FEYNMAN_SUMMARIZE_WINDOW_CHARS` (default: `6000`)
-- `--overlap <chars>` or `FEYNMAN_SUMMARIZE_OVERLAP_CHARS` (default: `500`)
-- `--tier1-threshold <chars>` or `FEYNMAN_SUMMARIZE_TIER1_THRESHOLD` (default: `8000`)
-- `--tier2-threshold <chars>` or `FEYNMAN_SUMMARIZE_TIER2_THRESHOLD` (default: `60000`)
+- `--window-size <chars>` (default: `6000`)
+- `--overlap <chars>` (default: `500`)
+- `--tier1-threshold <chars>` (default: `8000`)
+- `--tier2-threshold <chars>` (default: `60000`)
 
 Rules:
-- Inline flags override environment variables.
 - Validate `window-size > overlap` and `tier1-threshold < tier2-threshold`; if invalid, stop and report a clear configuration error.
 - Log resolved values once per run: `[summarize] config window=<w> overlap=<o> tier1=<t1> tier2=<t2>`.
 
@@ -130,17 +116,15 @@ Briefly summarize: "Source is ~<chars> chars -> <N> chunks -> <N> researcher sub
 
 ### 3c. Dispatch researcher subagents
 
-```json
-{
-  "tasks": [{
-    "agent": "researcher",
-    "task": "Read ONLY `outputs/.notes/<slug>-chunk-NNN.txt`. Extract: (1) key claims, (2) methodology or technical approach, (3) cited evidence. Do NOT use web_search or fetch external URLs — this is single-source summarization. If a claim appears to start or end mid-sentence at the file boundary, mark it BOUNDARY PARTIAL. Write to `outputs/.notes/<slug>-summary-chunk-NNN.md`.",
-    "output": "outputs/.notes/<slug>-summary-chunk-NNN.md"
-  }],
-  "concurrency": 4,
-  "failFast": false
-}
+Use one async workflow with a stable key for each chunk and a concurrency limit of four: write the script to `outputs/.plans/<slug>-workflow.js` with the write tool, then, after the write succeeds, in a later tool call, call `subagent` with `{ "workflow": "./outputs/.plans/<slug>-workflow.js", "async": true, "globalConcurrencyLimit": 4 }`. Expand the example item below for the actual chunk inventory; retain the single-source restriction and explicit output declaration for every child.
+
+```js
+return await runs.all([
+  { key: "chunk-NNN", agent: "researcher", task: "Read ONLY outputs/.notes/<slug>-chunk-NNN.txt. Extract: (1) key claims, (2) methodology or technical approach, (3) cited evidence. Do NOT use web_search or fetch external URLs — this is single-source summarization. If a claim appears to start or end mid-sentence at the file boundary, mark it BOUNDARY PARTIAL. Write to outputs/.notes/<slug>-summary-chunk-NNN.md.", output: "outputs/.notes/<slug>-summary-chunk-NNN.md" },
+]);
 ```
+
+Consume completion results before aggregation. `runs.all` returns an ordered array including ordinary child failures; inspect each `ok` and error. A validation or infrastructure failure can still fail the workflow. Relative output paths resolve against the workspace; verify each chunk summary on disk, and use the returned output reference for any that is missing. Record missing or failed chunks rather than treating an async launch receipt as a finished summary.
 
 ### 3d. Aggregate
 

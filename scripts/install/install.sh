@@ -198,7 +198,7 @@ resolve_release_metadata() {
   normalized_version="$(normalize_version "$VERSION")"
 
   if [ "$normalized_version" = "latest" ]; then
-    release_page="$(download_text "https://github.com/companion-inc/feynman/releases/latest")"
+    release_page="$(download_text "https://github.com/Companion-Inc/feynman/releases/latest")"
     resolved_version="$(printf '%s\n' "$release_page" | sed -n 's@.*releases/tag/v\([0-9][^"<>[:space:]]*\).*@\1@p' | head -n 1)"
 
     if [ -z "$resolved_version" ]; then
@@ -211,7 +211,7 @@ resolve_release_metadata() {
 
   bundle_name="feynman-${resolved_version}-${asset_target}"
   archive_name="${bundle_name}.${archive_extension}"
-  release_base_url="${FEYNMAN_INSTALL_BASE_URL:-https://github.com/companion-inc/feynman/releases/download/v${resolved_version}}"
+  release_base_url="${FEYNMAN_INSTALL_BASE_URL:-https://github.com/Companion-Inc/feynman/releases/download/v${resolved_version}}"
   download_url="${release_base_url}/${archive_name}"
   checksums_url="${release_base_url}/SHA256SUMS"
 
@@ -320,12 +320,12 @@ if [ ! -x "$candidate_bundle/feynman" ]; then
   echo "Downloaded archive did not contain the expected executable: ${bundle_name}/feynman" >&2
   exit 1
 fi
-candidate_version="$("$candidate_bundle/feynman" --version | tail -n 1)"
+candidate_version="$(FEYNMAN_TELEMETRY=off "$candidate_bundle/feynman" --version | tail -n 1)"
 if [ "$candidate_version" != "$resolved_version" ]; then
   echo "Downloaded bundle version mismatch: expected ${resolved_version}, found ${candidate_version}." >&2
   exit 1
 fi
-"$candidate_bundle/feynman" --help >/dev/null
+FEYNMAN_TELEMETRY=off "$candidate_bundle/feynman" --help >/dev/null
 
 mkdir -p "$INSTALL_APP_DIR"
 mkdir -p "$INSTALL_BIN_DIR"
