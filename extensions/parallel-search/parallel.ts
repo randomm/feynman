@@ -10,7 +10,7 @@ function formatText(value: unknown): string {
 	return JSON.stringify(value, null, 2);
 }
 
-async function runParallelCli(args: string[]): Promise<unknown> {
+export async function runParallelCli(args: string[]): Promise<unknown> {
 	try {
 		const { stdout } = await execFileAsync("parallel-cli", args, {
 			timeout: 300_000, // 5 minute absolute maximum

@@ -7,8 +7,9 @@ Private fork of **[`companion-inc/feynman`](https://github.com/companion-inc/fey
 > forms, which silently produces wrong answers when scripting against it.
 
 This fork is **not** upstreamed. Nothing here is intended for a PR to `companion-inc`. The only
-reason it exists is to keep the **parallel-cli (parallel.ai) web search integration** working.
-Everything else should track upstream exactly.
+reason it exists is to keep the **web search integration** working: **wigolo** (local, keyless,
+the default) with **parallel-cli** (parallel.ai) as the fallback. Everything else should track
+upstream exactly. See [Web backends](#web-backends-wigolo-default-parallel-fallback).
 
 ## Sync State
 
@@ -25,7 +26,7 @@ Everything else should track upstream exactly.
 
 ## Guiding Principle
 
-> **Take upstream verbatim for everything except the five files listed below.
+> **Take upstream verbatim for everything except the fork-owned files listed in the Fork Delta below.
 > Never re-apply a fork edit to agent *prose*, only to the frontmatter `tools:` allowlist.**
 
 Upstream actively rewrites the agent prompts (`researcher.md`, `verifier.md`, `SYSTEM.md`).
@@ -38,10 +39,11 @@ see [Retired Customisations](#retired-customisations).
 All web access is meant to go through parallel.ai, so it is tempting to strip `pi-web-access`.
 **Don't.** Decided 2026-08-06:
 
-- It is already inert here. `feynman doctor` shows exa / perplexity / gemini all *"not
-  configured"*, so `web_search` has no backend and cannot make calls. Traffic already goes to
-  parallel.ai with zero fork delta.
-- Removing it from `.feynman/settings.json` does not stick — `src/pi/package-presets.ts`
+- No keyed backend is configured here: `feynman doctor` shows exa / perplexity / gemini all *"not
+  configured"*. This fork has **not** verified whether pi-web-access's keyless path makes calls, so
+  treat its `web_search` as possibly live. The fork's own web traffic goes through `feynman_web_*`
+  (wigolo, then parallel).
+- Removing it from `.feynman/settings.json` does not stick — `src/pi/settings.ts`
   reconciles that list automatically (the same trap that killed the `pi-subagents` removal).
 - Upstream *patches* the package (`scripts/lib/pi-web-access-patch.mjs`) and asserts its cache
   wiring (`scripts/verify-package-artifact.mjs`), so removal likely breaks upstream's own checks.
@@ -59,7 +61,8 @@ tool names from the two frontmatter allowlists this fork already owns — **not*
 | Requirement | Notes |
 |---|---|
 | **Node**, version from `.nvmrc` | Managed by **`fnm`** on this host (Homebrew), initialized in `~/dotfiles/zsh/configs/tools.zsh` via `eval "$(fnm env --use-on-cd)"`. It auto-switches on `cd` from `.nvmrc`. |
-| **`parallel-cli`** on `$PATH` | **The whole point of this fork.** `extensions/parallel-search/parallel.ts` shells out to a binary literally named `parallel-cli`. Without it every `parallel_*` tool call fails with `ENOENT`. |
+| **wigolo** runtime | The default web backend for `feynman_web_*`. Run `sh scripts/fork/install-wigolo.sh` under the `.nvmrc` Node. It installs the pinned `wigolo@0.2.1` into `~/.feynman/tools/wigolo` and writes the wrapper `~/.feynman/bin/wigolo`. |
+| **`parallel-cli`** on `$PATH` | The fallback backend, and the only route to parallel's deep research. Without it `feynman_web_*` has no fallback, and `provider:"parallel"` calls and the legacy `parallel_*` tools fail with `ENOENT`. |
 | npm | Bundled with Node. |
 
 ### Node gotcha
@@ -92,7 +95,7 @@ Verify with `which feynman` and `feynman --version`.
 
 ## The Fork Delta
 
-Exactly **seven** files differ from upstream. Verify with:
+Exactly **thirteen** files differ from upstream. Verify with:
 
 ```bash
 sh scripts/fork/check-fork-delta.sh          # automated
@@ -101,13 +104,18 @@ git diff --name-status upstream/main HEAD    # or by hand
 
 | File | Risk | Change |
 |---|---|---|
-| `extensions/parallel-search/parallel.ts` | **LOW** | **New, fork-owned.** Exports `registerParallelTools(pi)`, registering `parallel_search`, `parallel_fetch`, `parallel_research`. Shells out to `parallel-cli` via `execFile` (no shell → no injection), always `--json`, 5-min timeout, 50 MB stdout cap. |
+| `extensions/parallel-search/parallel.ts` | **LOW** | **New, fork-owned.** Exports `registerParallelTools(pi)` and `runParallelCli` (the web router reuses it), registering `parallel_search`, `parallel_fetch`, `parallel_research`. Shells out to `parallel-cli` via `execFile` (no shell → no injection), always `--json`, 5-min timeout, 50 MB stdout cap. |
 | `tests/parallel-search.test.ts` | **LOW** | **New, fork-owned.** 13 unit tests over a mock `pi`. Runs as part of `npm test`. |
+| `extensions/web-providers/exec.ts` | **LOW** | **New, fork-owned.** Injectable `execFile` wrapper for the wigolo and parallel CLIs. Non-zero exits resolve with stdout. |
+| `extensions/web-providers/wigolo.ts` | **LOW** | **New, fork-owned.** wigolo argument builders, stdout parser, failure classifier, one jittered `SQLITE_BUSY` retry, and a concurrency limiter. |
+| `extensions/web-providers/tools.ts` | **MEDIUM** | **New, fork-owned.** Registers `feynman_web_search`, `feynman_web_fetch`, `feynman_web_research` and the router (wigolo by default, parallel as fallback). See [Web backends](#web-backends-wigolo-default-parallel-fallback). |
+| `tests/web-providers.test.ts` | **LOW** | **New, fork-owned.** 25 router, classifier, argument, and limiter tests with an injected `exec`. No real backend is spawned. Runs as part of `npm test`. |
+| `scripts/fork/install-wigolo.sh` | **LOW** | **New, fork-owned.** Installs the pinned `wigolo@0.2.1`, warms its models, and writes the `~/.feynman/bin/wigolo` wrapper. |
 | `scripts/fork/check-fork-delta.sh` | **LOW** | **New, fork-owned.** Post-sync verification. |
 | `scripts/fork/gen-models-json.mjs` | **LOW** | **New, fork-owned.** Generates `~/.feynman/agent/models.json` for Nebius and Trail Openers. See below. |
-| `extensions/research-tools.ts` | **MEDIUM** | **One line**: the `registerParallelTools` import and its call. Upstream adds registrations here often — it has merged cleanly so far because our lines sit in a stable alphabetical slot. |
-| `.feynman/agents/researcher.md` | **MEDIUM** | Frontmatter only: appends `parallel_search, parallel_fetch, parallel_research` to upstream's `tools:`. |
-| `.feynman/agents/verifier.md` | **MEDIUM** | Frontmatter only: appends `parallel_fetch` to upstream's `tools:`. |
+| `extensions/research-tools.ts` | **MEDIUM** | **Two imports and two calls**: `registerParallelTools` and `registerWebTools`. Upstream adds registrations here often — it has merged cleanly so far because our lines sit in a stable alphabetical slot. |
+| `.feynman/agents/researcher.md` | **MEDIUM** | Frontmatter only: appends `parallel_search, parallel_fetch, parallel_research, feynman_web_search, feynman_web_fetch, feynman_web_research` to upstream's `tools:`. |
+| `.feynman/agents/verifier.md` | **MEDIUM** | Frontmatter only: appends `parallel_fetch, feynman_web_fetch` to upstream's `tools:`. |
 | `FORK.md` | **LOW** | This file. Upstream has no counterpart. |
 
 Nothing else. In particular the fork does **not** touch `package.json`, `package-lock.json`,
@@ -145,7 +153,7 @@ subagent is what actually judges source recency.
 
 If upstream ever adds its own date/environment block, drop this to avoid two competing blocks.
 
-### `subagentOnlyExtensions` — required, or every delegation fails
+### `subagentOnlyExtensions` — RETIRED 2026-10-12 (kept for history; upstream now wires this)
 
 Child subagents **do not inherit Feynman's local `./extensions`**. `pi-subagents` launches them
 with only its runtime extension plus whatever npm packages `settings.json` lists — a run's
@@ -182,7 +190,7 @@ Package-provided tools are unaffected: `web_search` / `fetch_content` come from 
 `pi-web-access` **package**, which children do load. That asymmetry is why a delegation can look
 half-working — one agent succeeds on `fetch_content` while its siblings die on `parallel_search`.
 
-### The `src/model/catalog.ts` patch (the one risky edit)
+### The `src/model/catalog.ts` patch — RETIRED 2026-10-12 (kept for history; see below)
 
 Upstream disables "Pro-class" models as a cost guard:
 
@@ -208,6 +216,59 @@ file by taking upstream wholesale cannot fail silently. To re-apply after a bad 
 inside `isProClassModelSpec`. Keep upstream's regex untouched.
 
 ---
+
+## Web backends (wigolo default, parallel fallback)
+
+Agents reach the web through `feynman_web_search`, `feynman_web_fetch` and `feynman_web_research`.
+They use **wigolo** (local, keyless, `wigolo@0.2.1`) by default and **parallel-cli** as the fallback.
+The legacy `parallel_search`, `parallel_fetch` and `parallel_research` tools are unchanged and still
+call parallel directly, so they remain a no-surprise escape hatch.
+
+| Tool | `auto` order | Falls back to parallel when | Notes |
+|---|---|---|---|
+| `feynman_web_search` | wigolo, then parallel | infra error, timeout, or no results with no engines reached | `includeDomains`, `category`, `withContent` are wigolo-only |
+| `feynman_web_fetch` | wigolo, then parallel | infra error, `fetch_failed`, or `blocked_by_challenge` | `section`, `maxChars` are wigolo-only; `objective` is parallel-only |
+| `feynman_web_research` | wigolo only | **never** in `auto`; the error names `provider:"parallel"` as the paid deep-run alternative | `depth` is wigolo-only |
+
+- A per-call `provider: "auto" | "wigolo" | "parallel"` overrides the default. An explicit provider makes
+  exactly one attempt.
+- `invalid_input` is never retried or sent to the other backend. It is thrown.
+- A result starts with `[backend: wigolo]` or `[backend: parallel | fallback from wigolo: <reason>]`.
+  `details` carries `provider`, `attempts`, `warnings` and the backend's raw payload.
+- Tool names are deliberately not `wigolo_*` or `parallel_*`, so the model sees one surface whichever
+  backend answers.
+
+Environment variables:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `FEYNMAN_WEB_PROVIDER` | `auto` | Default backend when a call does not pass `provider`. An invalid value warns and uses `auto`. Set `parallel` to roll everything back. |
+| `FEYNMAN_WEB_FALLBACK` | on | Set to `0` to disable fallback in `auto`. |
+| `FEYNMAN_WIGOLO_BIN` | `~/.feynman/bin/wigolo`, else `wigolo` on `PATH` | wigolo executable or wrapper. |
+| `FEYNMAN_WIGOLO_CONCURRENCY` | `2` (max 8) | Concurrent wigolo processes per Feynman process. Subagents are separate processes that share `~/.wigolo`, so this is not a global cap. |
+
+Install, and re-install after any Node bump:
+
+```bash
+sh scripts/fork/install-wigolo.sh      # under the .nvmrc Node
+```
+
+The script installs `wigolo@0.2.1` into `~/.feynman/tools/wigolo`, runs `wigolo warmup` (a one-time
+model download), and writes `~/.feynman/bin/wigolo`. The wrapper pins the Node that built the native
+module, and points wigolo's `research` synthesis at the Trail Openers endpoint through
+`OPENAI_BASE_URL` and `WIGOLO_LLM_MODEL`. The API key is **not** handled by the fork: wigolo keeps it
+in its own keychain entry (`wigolo doctor` shows `openai configured (keychain)`).
+
+Known limits:
+
+- `wigolo research` synthesis runs on the Trail Openers box. If that box is down, research fails with
+  `upstream_error` and there is no automatic fallback. Use `provider:"parallel"` deliberately.
+- Concurrent wigolo processes share one SQLite cache. `SQLITE_BUSY` gets one retry and then falls back.
+- The `sampling_supported` field in wigolo's payload reports MCP client sampling, not LLM availability.
+  The fork does not treat it as a warning signal.
+- Upstream prose (`SYSTEM.md`, the agent bodies) still names `web_search` and `fetch_content`. The
+  default is enforced by the tools agents can call, not by that prose.
+- Cold start is roughly one second for a cached search. Measured-cold numbers are not recorded yet.
 
 ## Sync Runbook
 
@@ -258,13 +319,13 @@ Rollback at any point: `git reset --hard pre-sync-<version>`.
 | Conflicted file | What to do |
 |---|---|
 | `.feynman/SYSTEM.md` | `git checkout --theirs` — **take upstream whole, no exceptions.** |
-| `.feynman/settings.json` | `git checkout --theirs` — **take upstream whole.** Upstream pins package versions here and `src/pi/package-presets.ts` auto-reconciles it; any edit is fought by the reconciler. |
+| `.feynman/settings.json` | `git checkout --theirs` — **take upstream whole.** Upstream pins package versions here and `src/pi/settings.ts` reconciles it; any edit is fought by the reconciler. |
 | `package.json`, `package-lock.json` | `git checkout --theirs` — the fork owns nothing here. |
-| `.feynman/agents/researcher.md` | Take upstream whole, then append `, parallel_search, parallel_fetch, parallel_research` to the **frontmatter `tools:` line** and re-add the `subagentOnlyExtensions:` line. Leave all prose alone. |
-| `.feynman/agents/verifier.md` | Take upstream whole, then append `, parallel_fetch` to the **frontmatter `tools:` line** and re-add the `subagentOnlyExtensions:` line. Leave all prose alone. |
+| `.feynman/agents/researcher.md` | Take upstream whole, then append `, parallel_search, parallel_fetch, parallel_research, feynman_web_search, feynman_web_fetch, feynman_web_research` to the **frontmatter `tools:` line**. Leave all prose alone. |
+| `.feynman/agents/verifier.md` | Take upstream whole, then append `, parallel_fetch, feynman_web_fetch` to the **frontmatter `tools:` line**. Leave all prose alone. |
 | `extensions/research-tools.ts` | Keep upstream's full import + registration lists, then re-insert our two lines. |
-| `src/model/catalog.ts` | Take upstream whole, then re-apply the Pro-class allowlist (see [the patch](#the-srcmodelcatalogts-patch-the-one-risky-edit)). `npm test` and the check script both fail until you do. |
-| `extensions/parallel-search/parallel.ts`, `tests/parallel-search.test.ts`, `tests/pro-class-allowlist.test.ts`, `scripts/fork/check-fork-delta.sh` | Ours — upstream has no counterpart, so these never conflict. But `parallel.ts` **does** silently break on runtime renames; see Hazards. |
+| `src/model/catalog.ts` | Take upstream whole. The fork no longer patches this file (see Retired Customisations). |
+| `extensions/parallel-search/parallel.ts`, `tests/parallel-search.test.ts`, `extensions/web-providers/*.ts`, `tests/web-providers.test.ts`, `scripts/fork/check-fork-delta.sh`, `scripts/fork/install-wigolo.sh` | Ours — upstream has no counterpart, so these never conflict. But `parallel.ts` **does** silently break on runtime renames; see Hazards. |
 
 Never resolve an agent file by keeping "ours". Upstream adds tools to those allowlists
 (it added `write`, `edit`, and three `hf_*` tools in the 0.2.17 → 0.3.11 window); keeping our
@@ -352,7 +413,7 @@ alone. Deleting `~/.feynman/npm-global` wholesale would take those with it.
 
 ### 2. Pi runtime package renames break `parallel.ts`
 
-`parallel.ts` and its test import from the Pi runtime, and upstream has renamed these at least
+`parallel.ts`, `web-providers/tools.ts` and their tests import from the Pi runtime, and upstream has renamed these at least
 twice. Because these files are fork-owned they never conflict — they just **stop compiling**,
 and only `npm run typecheck` catches it (`npm run build` compiles `src/` only, per
 `tsconfig.build.json`).
@@ -398,7 +459,23 @@ npm view pi-docparser versions   # if the version is listed, the registry is fin
 Running `npm view` on the pinned packages refreshes the cache; so does `npm cache clean --force`.
 This is not caused by the merge — it reproduces on a pristine upstream checkout.
 
-### 4. `.nvmrc` moves between syncs
+### 4. wigolo's native module follows the Node version
+
+`better-sqlite3` inside wigolo is a native module. The first `wigolo` run under a Node major
+that the module was not built for fails with:
+
+```
+Error: The module '.../better_sqlite3.node' was compiled against a different Node.js version
+using NODE_MODULE_VERSION 127. This version of Node.js requires NODE_MODULE_VERSION 137.
+```
+
+This happened on this host: the `npx` cache had been built under Node 22 and was used under
+Node 24. The fork avoids the `npx` cache entirely. `install-wigolo.sh` builds the module under the
+current Node and writes a wrapper that pins that Node's absolute path. After any Node bump, re-run
+`sh scripts/fork/install-wigolo.sh`. The delta check also loads `better-sqlite3` under the current
+Node and fails if it does not load.
+
+### 5. `.nvmrc` moves between syncs
 
 See [Node gotcha](#node-gotcha). `20.19.0` → `24.18.0` across the 2026-04 → 2026-08 window.
 
@@ -412,11 +489,11 @@ A sync is done only when all of these pass.
 node -v                       # 1. matches .nvmrc exactly
 npm ci                        # 2. clean; leaves package-lock.json unmodified
 npm run typecheck             # 3. THE gate on parallel.ts — build alone won't catch it
-npm test                      # 4. full suite, incl. 13 parallel-search tests
+npm test                      # 4. full suite, incl. the parallel-search and web-providers tests
 npm run build                 # 5. clean
 feynman --version             # 6. reports the new version, not the old one
 feynman doctor                # 7. "pi runtime: ok"
-git diff --name-status upstream/main HEAD   # 8. only the 5 fork files + FORK.md
+git diff --name-status upstream/main HEAD   # 8. only the fork-owned files listed in the Fork Delta
 ```
 
 Then two runtime checks that no unit test covers:
@@ -424,6 +501,9 @@ Then two runtime checks that no unit test covers:
 ```bash
 # 9. parallel-cli reachable and returning results
 parallel-cli search "test query" --json --max-results 2
+
+# 9b. wigolo (default backend) answers a search through the wrapper
+~/.feynman/bin/wigolo search "test query" --json --max-results 2 --no-content
 
 # 10. all four Feynman agents still win over pi-subagents' colliding builtins
 PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT="$PWD/node_modules/@earendil-works/pi-coding-agent" \
@@ -435,7 +515,9 @@ console.log('project agents:', r.project.map(a => a.name).join(', '));
 # expect: researcher, reviewer, verifier, writer
 ```
 
-`scripts/fork/check-fork-delta.sh` automates checks 1, 3 and 8.
+`scripts/fork/check-fork-delta.sh` automates checks 1, 3 and 8, plus the web-tool wiring and
+backend-presence checks. It exits non-zero on any FAIL (Node mismatch, a wrong fork delta, missing
+wiring, or both backends missing). A single missing backend prints a WARN and still passes.
 
 ---
 
@@ -458,8 +540,7 @@ enough for the agents to use them, at a fraction of the merge cost.
 
 Upstream now computes the child-session extension list itself (`feynmanSubagentExtensions` in
 `src/pi/settings.ts`), pointing at `extensions/research-tools.ts` with the correct install path.
-The fork's absolute-path frontmatter line was removed, along with `scripts/fork/check-fork-delta.sh`
-check 5 that enforced it. `research-tools.ts` still registers the `parallel_*` tools, so children
+The fork's absolute-path frontmatter line was removed, along with the delta-script check that enforced it. `research-tools.ts` still registers the `parallel_*` tools, so children
 still get them. Re-check if upstream ever stops wiring that file into children.
 
 ### `src/model/catalog.ts` Pro-class allowlist — retired 2026-10-12

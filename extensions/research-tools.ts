@@ -14,6 +14,7 @@ import { registerParallelTools } from "./parallel-search/parallel.js";
 import { registerServiceTierControls } from "./research-tools/service-tier.js";
 import { registerScienceDatabaseTools } from "./research-tools/science-databases.js";
 import { registerResearchTelemetry } from "./research-tools/telemetry.js";
+import { registerWebTools } from "./web-providers/tools.js";
 
 export default function researchTools(pi: ExtensionAPI): void {
 	const cache: { agentSummaryPromise?: Promise<{ agents: string[]; chains: string[] }> } = {};
@@ -34,6 +35,7 @@ export default function researchTools(pi: ExtensionAPI): void {
 	registerModelErrorHint(pi);
 	registerOutputsCommand(pi);
 	registerParallelTools(pi);
+	registerWebTools(pi);
 	registerServiceTierControls(pi);
 	registerScienceDatabaseTools(pi);
 	registerResearchTelemetry(pi);

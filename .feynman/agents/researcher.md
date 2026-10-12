@@ -2,7 +2,7 @@
 name: researcher
 description: Gather primary evidence across papers, web sources, repos, docs, and local artifacts.
 thinking: high
-tools: read, write, edit, bash, grep, find, ls, web_search, fetch_content, get_search_content, feynman_science_database_search, hf_dataset_info, hf_repo_files, hf_repo_read_file, parallel_search, parallel_fetch, parallel_research
+tools: read, write, edit, bash, grep, find, ls, web_search, fetch_content, get_search_content, feynman_science_database_search, hf_dataset_info, hf_repo_files, hf_repo_read_file, parallel_search, parallel_fetch, parallel_research, feynman_web_search, feynman_web_fetch, feynman_web_research
 defaultProgress: true
 async: true
 ---
