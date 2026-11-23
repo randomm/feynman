@@ -15,10 +15,10 @@ upstream exactly. See [Web backends](#web-backends-wigolo-default-parallel-fallb
 
 | | |
 |---|---|
-| Last synced | **2026-10-12** |
-| Upstream commit | `6f1adbe` (`main`, package version `0.5.39`) |
-| Upstream tag line | v0.5.39 |
-| Previous sync | 2026-08-06 at `daa7f47` (v0.3.12) — 462 commits of drift |
+| Last synced | **2026-11-23** |
+| Upstream commit | `2cd3681` (`main`, package version `0.5.72`) |
+| Upstream tag line | v0.5.72 |
+| Previous sync | 2026-10-12 at `6f1adbe` (v0.5.39) |
 
 **Update this table on every sync.** It is the only record of where the fork sits.
 
