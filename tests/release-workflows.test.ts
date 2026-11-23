@@ -39,7 +39,7 @@ test("manual post-release gates exercise the live native installers", () => {
 	assert.match(installerJob[0], /FEYNMAN_INSTALL_BIN_DIR/);
 	assert.match(installerJob[0], /shell: powershell/);
 	assert.match(installerJob[0], /check-pi-rpc\.mjs/);
-	for (const os of ["ubuntu-latest", "macos-14", "windows-latest"]) {
+	for (const os of ["ubuntu-latest", "macos-15", "windows-latest"]) {
 		assert.match(installerJob[0], new RegExp(`- ${os}`));
 	}
 });
@@ -141,7 +141,7 @@ test("publish uses the exact verified tarball after native bundles pass", () => 
 		/build-native-bundles:\s*\n\s+needs:\s*\n\s+- version-check\s*\n\s+- verify\s*\n\s+- verify-package-consumers/,
 	);
 	assert.match(publishWorkflow, /verify-package-consumers:/);
-	for (const os of ["ubuntu-latest", "macos-14", "windows-latest"]) {
+	for (const os of ["ubuntu-latest", "macos-15", "windows-latest"]) {
 		assert.match(publishWorkflow, new RegExp(`- os: ${os}`));
 	}
 	for (const nodeVersion of ["22.22.0", "24.21.0", "26"]) {
@@ -282,4 +282,12 @@ test("version reconciliation and post-publish verification cover all release sur
 	for (const workflow of [e2eWorkflow, publishWorkflow]) {
 		assert.doesNotMatch(workflow, /uses: actions\/[^@\s]+@v\d/);
 	}
+});
+
+test("the Windows native bundle build extracts Node.js with the .NET ZIP extractor", () => {
+	// Expand-Archive in powershell.exe launched from pwsh loads PowerShell 7's
+	// Archive module and fails on the windows-2025 runner image (20261116).
+	const buildScript = readFileSync("scripts/build-native-bundle.mjs", "utf8");
+	assert.match(buildScript, /\[System\.IO\.Compression\.ZipFile\]::ExtractToDirectory/);
+	assert.doesNotMatch(buildScript, /Expand-Archive/);
 });

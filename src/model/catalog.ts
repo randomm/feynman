@@ -1,6 +1,4 @@
-import { getEnvApiKey } from "@earendil-works/pi-ai/compat";
 
-import { readJsonFile } from "../config/json-file.js";
 import { createModelRuntime } from "./registry.js";
 
 type ModelRecord = {
@@ -135,6 +133,7 @@ const RESEARCH_MODEL_FALLBACK_PREFERENCES: ResearchModelPreference[] = [
 		reason: "newest OpenRouter OpenAI GPT fallback when direct OpenAI access is unavailable",
 	},
 	exactResearchModel("minimax/MiniMax-M3", "good fallback when MiniMax is the available research model"),
+	exactResearchModel("minimax/MiniMax-M3.1-Flash", "fast MiniMax fallback when MiniMax is the available research model"),
 	exactResearchModel("minimax/MiniMax-M2.7", "good fallback when MiniMax is the available research model"),
 	exactResearchModel("minimax/MiniMax-M2.7-highspeed", "good fallback when MiniMax is the available research model"),
 	exactResearchModel("kimi-coding/kimi-for-coding", "Kimi Coding Plan stable ID, auto-maps to the latest backend model"),
@@ -382,10 +381,8 @@ function sortProviders(left: ProviderStatus, right: ProviderStatus): number {
 }
 
 export async function getAuthenticatedModelRecords(authPath: string): Promise<ModelRecord[]> {
-	const expiredOAuthProviders = readExpiredOAuthProviders(authPath);
 	const modelRuntime = await createModelRuntime(authPath);
 	return (await modelRuntime.getAvailable())
-		.filter((model) => !expiredOAuthProviders.has(model.provider))
 		.map((model) => ({ provider: model.provider, id: model.id, name: model.name }));
 }
 
@@ -398,22 +395,6 @@ export async function getSupportedModelRecords(authPath: string): Promise<ModelR
 	return modelRuntime
 		.getModels()
 		.map((model) => ({ provider: model.provider, id: model.id, name: model.name }));
-}
-
-function readExpiredOAuthProviders(authPath: string): Set<string> {
-	const expired = new Set<string>();
-	try {
-		const parsed = readJsonFile(authPath) as Record<string, unknown>;
-		for (const [provider, credential] of Object.entries(parsed)) {
-			if (!credential || typeof credential !== "object") continue;
-			const typedCredential = credential as { type?: unknown; expires?: unknown };
-			if (typedCredential.type !== "oauth" || typeof typedCredential.expires !== "number") continue;
-			if (typedCredential.expires > Date.now()) continue;
-			if (getEnvApiKey(provider)) continue;
-			expired.add(provider);
-		}
-	} catch {}
-	return expired;
 }
 
 export async function chooseRecommendedModel(authPath: string): Promise<{ spec: string; reason: string } | undefined> {

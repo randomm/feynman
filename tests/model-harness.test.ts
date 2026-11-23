@@ -15,9 +15,8 @@ import {
 	shouldRunInteractiveSetup,
 } from "../src/cli.js";
 import { buildModelStatusSnapshotFromRecords, choosePreferredModelRecord, chooseRecommendedModel, getAvailableModelRecords, getSupportedModelRecords, isProClassModelSpec } from "../src/model/catalog.js";
-import { MODEL_API_KEY_PROVIDERS } from "../src/model/api-key-providers.js";
 import { getOrCreateDeviceId, isLocalModelProvider, resolveModelProviderForCommand, setDefaultModelSpec } from "../src/model/commands.js";
-import { createModelRegistry } from "../src/model/registry.js";
+import { createModelRuntime } from "../src/model/registry.js";
 import { canonicalizeModelSpec, parseModelSpec } from "../src/pi/settings.js";
 
 function createAuthPath(contents: Record<string, unknown>): string {
@@ -109,8 +108,8 @@ test("chooseRecommendedModel prefers the newest OpenAI GPT exposed by Pi", async
 
 	const recommendation = await chooseRecommendedModel(authPath);
 
-	// Pi 0.87.1 catalogs GPT-5.6 and GPT-6 tiers; Terra is the standard one.
-	assert.equal(recommendation?.spec, "openai/gpt-5.6-terra");
+	// Pi 1.5.0 catalogs GPT-6.1 tiers; Terra is the standard one.
+	assert.equal(recommendation?.spec, "openai/gpt-6.1-terra");
 	assert.match(recommendation?.reason ?? "", /newest authenticated OpenAI GPT model/);
 });
 
@@ -140,7 +139,7 @@ test("model specs preserve colon-bearing custom model ids and canonicalize Pi la
 		}) + "\n",
 		"utf8",
 	);
-	const registry = await createModelRegistry(authPath);
+	const registry = await createModelRuntime(authPath);
 
 	for (const spec of ["ollama/qwen3:0.6b", "ollama:qwen3:0.6b"]) {
 		const model = parseModelSpec(spec, registry);
@@ -205,6 +204,8 @@ test("common wrong flags and commands name the right one", () => {
 	assert.doesNotMatch(run(["-p", "hi", "--model", "nope/none"]), /Unknown option '-p'/);
 	assert.match(run(["--json"]), /Did you mean `feynman --mode json`\?/);
 	assert.match(run(["--work-dir", "x"]), /Did you mean `feynman --cwd <dir>`\?/);
+	assert.match(run(["--update"]), /Did you mean `feynman update`\?/);
+	assert.match(run(["model", "setup"]), /To sign in, run `feynman model login`\./);
 	assert.match(run(["-v"]), /^\d+\.\d+\.\d+$/m);
 });
 
@@ -286,13 +287,15 @@ test("packages CLI hides removed UI and bulk extras", () => {
 	}
 });
 
-test("every API-key provider Feynman offers is a provider Pi knows", async () => {
-	// Pi 1.0.3 renamed azure-openai-responses to azure; a stale id would save
-	// credentials no model uses.
+test("the API-key menu offers every provider Pi can sign in with an API key", async () => {
+	const { listApiKeyProviders } = await import("../src/model/commands.js");
 	const authPath = createAuthPath({});
-	const piProviders = new Set((await getSupportedModelRecords(authPath)).map((model) => model.provider));
-	const unknown = MODEL_API_KEY_PROVIDERS.filter((provider) => provider.envVar && !piProviders.has(provider.id)).map((provider) => provider.id);
-	assert.deepEqual(unknown, []);
+	const ids = (await listApiKeyProviders(authPath)).map((provider) => provider.id);
+	for (const id of ["openai", "anthropic", "deepseek", "fireworks", "together", "nvidia", "google-vertex", "amazon-bedrock"]) {
+		assert.ok(ids.includes(id), id);
+	}
+	// Feynman-only setups for endpoints Pi has no sign-in for.
+	for (const id of ["lm-studio", "litellm", "__custom__"]) assert.ok(ids.includes(id), id);
 });
 
 test("chooseRecommendedModel prefers Copilot Claude Opus over alphabetical order", async () => {
@@ -334,7 +337,9 @@ test("chooseRecommendedModel prefers OpenCode Go Kimi when OpenCode Go is the au
 	});
 });
 
-test("getAvailableModelRecords excludes expired OAuth credentials without an env fallback", async () => {
+// Pi refreshes an expired OAuth access token on the next request, so a login
+// with a refresh token is still usable; treating it as no model reopened setup.
+test("getAvailableModelRecords keeps OAuth logins whose access token has expired", async () => {
 	const authPath = createAuthPath({
 		anthropic: {
 			type: "oauth",
@@ -346,7 +351,7 @@ test("getAvailableModelRecords excludes expired OAuth credentials without an env
 
 	const available = await getAvailableModelRecords(authPath);
 
-	assert.equal(available.some((model) => model.provider === "anthropic"), false);
+	assert.equal(available.some((model) => model.provider === "anthropic"), true);
 });
 
 test("getAvailableModelRecords keeps unexpired OAuth credentials available", async () => {
@@ -511,14 +516,14 @@ test("model help lists model commands, and -h is an alias for --help", () => {
 	assert.match(shortHelp.stdout, /feynman model list/);
 });
 
-test("OAuth login reuses one device ID stored in the agent settings", () => {
+test("OAuth login reuses one device ID stored in the agent settings", async () => {
 	const authPath = createAuthPath({});
 	const settingsPath = join(dirname(authPath), "settings.json");
 	writeFileSync(settingsPath, JSON.stringify({ defaultProvider: "openai", defaultModel: "gpt-5.6-terra" }));
 
-	const first = getOrCreateDeviceId(authPath);
+	const first = await getOrCreateDeviceId(authPath);
 	assert.match(first, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-	assert.equal(getOrCreateDeviceId(authPath), first);
+	assert.equal(await getOrCreateDeviceId(authPath), first);
 	assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), { defaultProvider: "openai", defaultModel: "gpt-5.6-terra", deviceId: first });
 });
 
@@ -590,7 +595,7 @@ test("buildModelStatusSnapshotFromRecords flags an invalid current model and sug
 	assert.ok(snapshot.guidance.some((line) => line.includes("Configured default model is unavailable")));
 });
 
-test("chooseRecommendedModel prefers the newest MiniMax over highspeed when that is the authenticated provider", async () => {
+test("chooseRecommendedModel prefers MiniMax M3 when that is the authenticated provider", async () => {
 	await withoutModelEnv(async () => {
 		const authPath = createAuthPath({
 			minimax: { type: "api_key", key: "minimax-test-key" },
@@ -719,17 +724,42 @@ test("shouldRunInteractiveSetup skips onboarding for explicit model overrides or
 	assert.equal(await shouldRunInteractiveSetup(undefined, undefined, false, authPath), false);
 });
 
-test("isLocalModelProvider flags known local provider ids without consulting models.json", () => {
+test("isLocalModelProvider flags known local provider ids without consulting models.json", async () => {
 	const authPath = createAuthPath({});
 
-	assert.equal(isLocalModelProvider(authPath, "ollama"), true);
-	assert.equal(isLocalModelProvider(authPath, "lm-studio"), true);
-	assert.equal(isLocalModelProvider(authPath, "vllm"), true);
-	assert.equal(isLocalModelProvider(authPath, "anthropic"), false);
-	assert.equal(isLocalModelProvider(authPath, ""), false);
+	assert.equal(await isLocalModelProvider(authPath, "ollama"), true);
+	assert.equal(await isLocalModelProvider(authPath, "lm-studio"), true);
+	assert.equal(await isLocalModelProvider(authPath, "vllm"), true);
+	assert.equal(await isLocalModelProvider(authPath, "anthropic"), false);
+	assert.equal(await isLocalModelProvider(authPath, ""), false);
 });
 
-test("isLocalModelProvider flags custom providers whose models.json baseUrl points at localhost", () => {
+test("isLocalModelProvider reads models.json the way Pi does: comments, model baseUrl overrides, built-in overrides", async () => {
+	const authPath = createAuthPath({});
+	writeFileSync(
+		join(authPath, "..", "models.json"),
+		`{
+	// Pi accepts comments in models.json.
+	"providers": {
+		"my-proxy": { "baseUrl": "http://127.0.0.1:8000/v1" },
+		"per-model": {
+			"baseUrl": "https://example.com/v1", "api": "openai-completions", "apiKey": "k",
+			"models": [{ "id": "m", "baseUrl": "http://localhost:9000/v1" }]
+		},
+		"openai": { "baseUrl": "http://0.0.0.0:1234/v1" }
+	}
+}
+`,
+		"utf8",
+	);
+
+	assert.equal(await isLocalModelProvider(authPath, "my-proxy"), true);
+	assert.equal(await isLocalModelProvider(authPath, "per-model"), true);
+	assert.equal(await isLocalModelProvider(authPath, "openai"), true);
+	assert.equal(await isLocalModelProvider(authPath, "anthropic"), false);
+});
+
+test("isLocalModelProvider flags custom providers whose models.json baseUrl points at localhost", async () => {
 	const authPath = createAuthPath({});
 	const modelsJsonPath = join(authPath, "..", "models.json");
 	writeFileSync(
@@ -743,8 +773,8 @@ test("isLocalModelProvider flags custom providers whose models.json baseUrl poin
 		"utf8",
 	);
 
-	assert.equal(isLocalModelProvider(authPath, "my-proxy"), true);
-	assert.equal(isLocalModelProvider(authPath, "openrouter"), false);
+	assert.equal(await isLocalModelProvider(authPath, "my-proxy"), true);
+	assert.equal(await isLocalModelProvider(authPath, "openrouter"), false);
 });
 
 test("buildLocalModelWorkflowNotice names the configured model and the workflow", () => {
@@ -753,4 +783,16 @@ test("buildLocalModelWorkflowNotice names the configured model and the workflow"
 	assert.ok(notice.includes("ollama/gemma4:latest"));
 	assert.ok(notice.includes("/deepresearch"));
 	assert.ok(notice.includes("feynman model set"));
+});
+
+test("--model accepts the names Pi resolves and keeps a thinking suffix, preferring a signed-in provider", async () => {
+	const { resolveExplicitModelSpec } = await import("../src/pi/settings.js");
+	const authPath = createAuthPath({ anthropic: { type: "api_key", key: "sk-ant-test" } });
+	const runtime = await (await import("../src/model/registry.js")).createModelRuntime(authPath);
+	assert.equal(resolveExplicitModelSpec("anthropic/claude-opus-5-5", runtime), "anthropic/claude-opus-5-5");
+	assert.equal(resolveExplicitModelSpec("anthropic:claude-opus-5-5", runtime), "anthropic/claude-opus-5-5");
+	assert.equal(resolveExplicitModelSpec("anthropic/claude-opus-5-5:high", runtime), "anthropic/claude-opus-5-5:high");
+	assert.equal(resolveExplicitModelSpec("claude-opus-5-5", runtime), "anthropic/claude-opus-5-5");
+	assert.match(resolveExplicitModelSpec("sonnet:high", runtime) ?? "", /^anthropic\/claude-sonnet-[^:]+:high$/);
+	assert.equal(resolveExplicitModelSpec("no-such-model-xyz", runtime), undefined);
 });

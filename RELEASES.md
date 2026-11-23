@@ -6,6 +6,246 @@ GitHub release notes are generated from the matching `## vX.Y.Z` section in this
 
 ## Unreleased
 
+## v0.5.72 - 2026-11-20
+
+- **Pi 1.6.0.** GPT-6.2 Astra and GPT-6.2 Sol are available on the `openai`, `azure`, and `openai-codex` providers, and GPT-6.2 Sol is their default model. Provider errors that report only a socket error, such as `read ECONNRESET`, or say "Connection closed." are now retried automatically. Pressing Esc during a batch of tool calls no longer leaves the unstarted calls without a result, and the find tool's path patterns are now relative to the search folder, like grep's.
+- **pi-subagents 0.89.2.** Subagent calls from models that fill unused options with `"null"`, such as GLM-5.3, now work. A workflow given an `output` file writes it only when the workflow completes, so a failed run no longer leaves an error behind in that file. A background subagent whose status file can't be read keeps showing as running instead of being dropped as failed. A workflow no longer waits forever when one of its background subagents finishes after the Pi that started it has exited, and a subagent that lists an MCP server configured with `"openUi": false` in its `tools` now starts.
+- **/lit and /summarize start their parallel researchers on the first try.** They now wait for the workflow script to be written before launching it. On Pi 1.6.0, models could write the script and launch it in the same batch of tool calls, so the first launch failed with `Failed to read workflow script` and had to be retried.
+- **Semantic Scholar backoff.** With `SEMANTIC_SCHOLAR_API_KEY` set, a rate-limited Semantic Scholar search now retries up to six times with growing waits (capped at 15 seconds) instead of failing after one retry. Without a key it still fails fast so the agent can switch to OpenAlex. Thanks to @kommerzienrat (#384).
+
+## v0.5.71 - 2026-11-16
+
+- **pi-web-access 0.48.0.** DuckDuckGo searches are paced and share a cooldown, so they no longer get blocked after a few searches in a row. A search provider that times out now hands off to the next one instead of failing the search, and fetched pages come back more complete when the main extractor misses text. `feynman search set` accepts the new SpecStream, Autom, and cloro providers.
+
+## v0.5.70 - 2026-11-14
+
+- **Security patch: fast-xml-parser 5.12.1 and fast-xml-builder 1.3.2.** Fixes a quadratic-time attribute scan in the XML validator ([GHSA-7cfw-w2rf-f3jc](https://github.com/advisories/GHSA-7cfw-w2rf-f3jc)) and an uncontrolled recursion crash in the XML builder ([GHSA-g62r-xqpr-7fwx](https://github.com/advisories/GHSA-g62r-xqpr-7fwx)). arXiv, PubMed, and Europe PMC results parse the same as before.
+
+## v0.5.69 - 2026-11-13
+
+- **pi-subagents 0.88.1.** A permission prompt or other dialog that opens while the fleet inspector is up is no longer hidden behind it. `status` and `stop` no longer report a cleanly finishing background subagent as having ended without proof, and a manual `/compact` no longer wakes an idle parent while background subagents run.
+- **Preserve JATS inline text.** PubMed and Europe PMC full-text results keep words inside inline markup in their original order, including subscripts and superscripts, without joining adjacent paragraphs. Section snippet limits and metadata are unchanged.
+- **Patched hono.** Alpha Hub's MCP SDK now resolves hono 4.13.18 and @hono/node-server 2.1.8, which fix advisories published on November 12 (GHSA-4m76-xfj5-7975, GHSA-46wx-v44x-9hh2, GHSA-4h7h-rv7c-7m2v, GHSA-qv5m-9pm6-hqp3, GHSA-jpvv-r467-5p4w).
+
+## v0.5.68 - 2026-11-11
+
+- **pi-subagents 0.88.0.** A child waiting for your answer no longer runs out its `timeoutMs` while it waits, and a reply cut off at the model's output limit now fails instead of passing as a success. The subagent widget and `status` show the latest progress a running child reported. Copies of the parent session written by forked subagents are now deleted after `artifactConfig.cleanupDays`, so they no longer fill the disk. Also fixes Windows machines that block PowerShell and gateways that require a prompt cache key.
+- **Paper search accepts `sort: "citation"`.** `feynman_science_database_search` recommends Semantic Scholar's default citation-count sort, and some models then passed `sort: "citation"`, which failed validation. The tool now treats `citation`, `citations` and `citation_count` as that default.
+
+## v0.5.67 - 2026-11-10
+
+- **Pi 1.5.2.**
+  - Resuming a session whose project folder was moved or deleted now offers Continue, Fork or Cancel instead of only continuing; Fork copies it into the current folder so later resumes no longer ask.
+  - The Anthropic default model is now `claude-opus-5-5`.
+  - Pi's `cacheWarming` default is now `"idle"`, which keeps prompt caches warm for up to 30 minutes between runs and may change provider spend. Set `cacheWarming` to `"streaming"` to restore the old behaviour.
+
+## v0.5.66 - 2026-11-08
+
+- **pi-subagents 0.87.0.** A subagent model written as `provider/id` now always runs on that provider instead of silently falling back to another provider's copy of the model (and billing that account); the launch fails with an error naming the alternative instead. `stop` with `drain: true` ends a long workflow without killing researchers already running, keeping their results. Old subagent artifacts in nested session folders are now cleaned up after `artifactConfig.cleanupDays`, and a Pi install missing `@earendil-works/pi-schema` now fails a background launch immediately with an error naming the package.
+
+## v0.5.65 - 2026-11-06
+
+- **pi-subagents 0.86.0.** A session no longer loses its `subagent` tool after a compaction when pi-subagents was reloaded or updated earlier in that session. With one background researcher running, the expanded background-agents widget shows its whole task (up to 8 wrapped lines) instead of one line cut at 96 characters. A subagent's JSON output check no longer fails as invalid JSON when an environment variable with a secret-looking name holds a common value such as `true`.
+
+## v0.5.64 - 2026-11-05
+
+- **pi-subagents 0.85.0 and pi-web-access 0.47.0.** Workflow scripts that launch parallel researchers now run in a locked-down process, a research prompt with long runs of separators or `git` options no longer stalls a workflow, and resuming a background run no longer trusts files that run could rewrite (runs started before this update must be relaunched). Fetching a GitHub repository now returns READMEs up to 100K characters instead of 8K, and on Windows cloned repositories go to your temp folder instead of `C:\tmp`. `feynman search set` now also accepts the new `sofya` and `outcrawl` search providers, which are used only when you pick them. `/lit` now launches parallel researchers with the same workflow form as `/deepresearch`, fixing a first-call `parallel is not defined` failure.
+
+## v0.5.63 - 2026-11-04
+
+- **pi-btw 0.8.1.** While a `/btw` side question is being answered, messages you submit in the main editor are no longer held until it finishes; the answer streams in the overlay. Side threads also no longer repeat the working directory section of the system prompt.
+
+## v0.5.62 - 2026-11-03
+
+- Parallel researcher subagents in `/deepresearch`, `/lit` and `/summarize` no longer fail with `args.tasks[0] contains unsupported fields: output`. The workflow examples in the prompts and docs no longer put an `output` field on each item; each task names its output path instead.
+- **Pi 1.5.0.**
+  - Security: Pi now ships `undici` 8.12.3 and `minimatch` 11.0.3, so the `undici` advisories on Pi 1.4.0's pinned 8.10.2 copy and the `minimatch` advisory ([GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)) on its 10.2.6 copy are gone. Feynman's release audit has no exceptions again.
+  - Long streamed tool calls and code-heavy answers use much less CPU: arguments are parsed once per delta, and highlighting and rendered Markdown are reused instead of redone on every update.
+  - Tool arguments are validated with Pi's new schema library. A single value where a list is expected (for example one paper section) is now wrapped into a list instead of being rejected, and validation errors read `- paper: missing`.
+  - Claude sessions no longer fail with `role 'system' must precede an 'assistant' message` after an empty or reasoning-only reply.
+  - Failed session writes no longer leave resumed sessions missing earlier history.
+  - `pi.exec()` no longer crashes on very large command output or hangs on commands that ignore SIGTERM.
+  - GPT-6.1 Terra is available through OpenAI, Azure OpenAI and OpenAI Codex; with only an OpenAI key, Feynman now recommends `openai/gpt-6.1-terra`.
+
+## v0.5.61 - 2026-10-30
+
+- **`feynman mcp` adds MCP servers.** Pi has built-in MCP support, but its docs say `pi mcp add`, and `feynman mcp list` used to be sent to the model as a chat question. `feynman mcp add|list|remove` now runs Pi's own command with Feynman's settings, saves servers in `~/.feynman/agent/mcp.json`, and every session loads them. For example, to use your Zotero library with [zotero-mcp](https://github.com/54yyyu/zotero-mcp): `feynman mcp add zotero --env ZOTERO_LOCAL=true -- zotero-mcp`. Pi's own output and help still say `pi mcp`; use `feynman mcp` instead.
+
+## v0.5.60 - 2026-10-29
+
+- **pi-subagents 0.84.0.**
+  - Security fix: workflow scripts can no longer reach the Feynman process outside their sandbox ([GHSA-6v8j-6w28-2w8r](https://github.com/nicobailon/pi-subagents/security/advisories/GHSA-6v8j-6w28-2w8r)).
+  - Finished background subagent runs are now deleted from disk after 30 days (90 if their session still exists) instead of being kept forever.
+- **pi-web-access 0.46.0.**
+  - Reading a web page with a question on Claude Opus 5.5 or Sonnet 5.5 no longer fails with `"thinking.type.disabled" is not supported for this model`.
+  - Reading a PDF returns its text instead of only a note saying where the file was saved.
+  - `feynman search set` accepts three new providers: `cloudflare` (also set `CLOUDFLARE_ACCOUNT_ID`), `searchapi` (Google through SearchApi) and `tabstack` (one cited answer). Each runs only when you choose it.
+  - A rate-limited free Exa search now says so instead of claiming no search provider is set up.
+- MiniMax M3.1 Flash is now a research model fallback, after MiniMax M3. Thanks to @octo-patch (#364).
+
+## v0.5.59 - 2026-10-28
+
+- **pi-subagents 0.83.1.**
+  - Stopping, interrupting or resuming a research subagent can no longer act on the wrong run: an interrupt with no id is refused, and resuming a worktree child while it is still cleaning up no longer runs it in your main checkout.
+  - Agent files with a blank line inside an indented frontmatter block are read in full, so settings below that line are no longer dropped.
+- The startup header no longer crashes Feynman when the terminal is two columns wide or less.
+- Five more `undici` advisories published Oct 27 ([GHSA-4w7w-5xrc-9h26](https://github.com/advisories/GHSA-4w7w-5xrc-9h26), [GHSA-2m5v-pch6-74hx](https://github.com/advisories/GHSA-2m5v-pch6-74hx), [GHSA-qrxm-fqhp-jwvm](https://github.com/advisories/GHSA-qrxm-fqhp-jwvm), [GHSA-9fm3-97px-rjf6](https://github.com/advisories/GHSA-9fm3-97px-rjf6), [GHSA-55wc-3pg8-jfw6](https://github.com/advisories/GHSA-55wc-3pg8-jfw6)) are already fixed in the `undici` 8.12.3 Feynman installs. Pi 1.4.0's own pinned 8.10.2 copy still has them until Pi ships its next release.
+
+## v0.5.58 - 2026-10-26
+
+- **pi-subagents 0.83.0.**
+  - Background research subagents that finished their work always report it, instead of ending as "exited with code 0 before writing a result"; a foreground subagent whose child stops after its final reply returns instead of hanging.
+  - Turns after a subagent returns keep the prompt cache on models that take mid-conversation system messages, so they are cheaper and faster.
+  - pi-subagents now uses a patched `undici` (8.12.3), so only Pi's own pinned copy remains (see v0.5.57).
+- **pi-web-access 0.45.0.**
+  - The web tools add about 1.1k tokens to every model request instead of 2.8k.
+  - DuckDuckGo search no longer gets your IP blocked by its bot check when several searches run at once.
+  - `source_check` shows the matching passages under each source.
+  - `feynman search set ninerouter <base-url>` selects a self-hosted [9router](https://github.com/decolua/9router) gateway.
+
+## v0.5.57 - 2026-10-24
+
+- **Security updates from advisories published Oct 23.**
+  - `undici` 8.12.3, now a direct dependency, so a fresh install no longer gives every package the pinned 8.10.2 below ([GHSA-xjj6-f33q-929c](https://github.com/advisories/GHSA-xjj6-f33q-929c), [GHSA-4qv8-2p9j-2685](https://github.com/advisories/GHSA-4qv8-2p9j-2685), [GHSA-f72v-6w45-q472](https://github.com/advisories/GHSA-f72v-6w45-q472)).
+  - `body-parser` 2.4.0, `fast-uri` 3.1.9 and `zod` 4.6.7, through Alpha Hub's MCP SDK.
+  - The website's build tools (vite 8.3.5, sharp 0.35.5, hono 4.13.13 and others) are patched too; its full `npm audit` is clean.
+- Pi 1.4.0 and pi-subagents 0.81.0 still pin `undici` 8.10.2 for their own HTTP clients. Feynman can't change those copies; they'll move when Pi ([pi#11208](https://github.com/earendil-works/pi/issues/11208)) and pi-subagents ([#3022](https://github.com/nicobailon/pi-subagents/issues/3022)) release patched versions.
+
+## v0.5.56 - 2026-10-23
+
+- **pi-subagents 0.81.0.**
+  - A research subagent asked for structured output that forgets to return it gets one more turn to do so, instead of failing and losing its work.
+  - The main session can tell subagent completion notices apart from text you typed.
+  - In fullscreen, you can click a subagent in the inspector to select it and scroll its output with the mouse or trackpad.
+  - Windows: Feynman starts faster, and no longer freezes for about 8 seconds at startup when the subagent temp folder has broken permissions.
+
+## v0.5.55 - 2026-10-22
+
+- **Clearer hints for two more OpenAI errors.**
+  - A project without access to a model (`403 ... does not have access to model`) now says the account can't use that model, instead of saying your credentials were rejected.
+  - "Request too large ... tokens per min" now says the request is bigger than the account's per-minute token limit, so retrying won't help.
+
+## v0.5.54 - 2026-10-22
+
+- **Two more model errors explain themselves.** When a run ends on an error, Feynman names the cause:
+  - A `404 Not Found` from the provider says the model id or endpoint doesn't exist, and to check the model with `/model` and the `baseUrl` in `models.json`.
+  - "The model refused to complete the request" says the model declined, and to rephrase or pick another model.
+- `ip-address` 10.7.4 (through Alpha Hub's MCP SDK) fixes [GHSA-rxp7-6hxx-x8q5](https://github.com/advisories/GHSA-rxp7-6hxx-x8q5), a slow parse of long IPv6 zone identifiers.
+
+## v0.5.53 - 2026-10-22
+
+- **Pi 1.4.0.**
+  - Long research sessions no longer break after a response is cut off at the output limit; before, every later request in that session was rejected.
+  - Compaction no longer fails with "generation hit the token cap" when the model reasons at length while summarizing a long session.
+  - Parallel research subagents that run in-process wait for a free codemode worker instead of failing when two are already busy (`PI_CODEMODE_MAX_WORKERS` raises the limit).
+  - The terminal is restored when Feynman exits without its normal teardown, instead of flooding the shell prompt with escape sequences.
+  - More gateway and proxy failures are retried automatically, including "stream disconnected before completion".
+  - A tool result that is only whitespace no longer makes OpenAI and Google requests fail with a 400.
+  - `mcp.json` files saved with a UTF-8 BOM (Windows) parse again.
+
+## v0.5.52 - 2026-10-21
+
+- **pi-subagents 0.80.0.**
+  - A background research subagent that finishes while the main session is busy keeps its completion notice across a restart; the next session that opens it shows the result.
+  - Waking the main session after a subagent finishes no longer adds an "Inspect subagent updates above" line to the transcript.
+  - Each child of a `parallel` call can set its own `cwd` and `model`.
+  - A steer that times out on a busy subagent no longer blocks every later steer on that run.
+  - Subagents no longer inherit your `APPEND_SYSTEM.md`.
+  - Workflows started from providers with very long tool-call ids (LiteLLM with Gemini) no longer fail at launch.
+  - Windows: Feynman no longer exits at startup when security software blocks `git` (`spawn EPERM`).
+- **pi-web-access 0.44.0.**
+  - `fetch_content` returns short, complete static pages instead of reporting them as incomplete.
+  - A default search provider list now falls back to `searchRouting` when every provider in it fails.
+  - Linkup is a new search provider: `feynman search set linkup <key>`. Each search uses Linkup credits, so `auto` never picks it.
+  - Most search providers can be routed through your own gateway with a `<provider>BaseUrl` setting; API keys are dropped when a provider redirects to another site.
+- The native installer bundle ships hono 4.13.13, for GHSA-5r4p-p66f-jhc7.
+
+## v0.5.51 - 2026-10-19
+
+- **A damaged `auth.json` says so.** When `~/.feynman/agent/auth.json` isn't valid JSON, for example after a hand edit, every command used to print only `Expected property name or '}' in JSON`. Feynman now names the file and says to fix it, or move it aside and sign in again with `feynman setup`.
+- `feynman --update` points to `feynman update`, and `feynman model setup` points to `feynman model login`.
+
+## v0.5.50 - 2026-10-18
+
+- **pi-subagents 0.79.1.**
+  - Sessions that have not delegated yet no longer send the `bg_wait` and `subagent_supervisor` tool definitions with every request, about 1,500 characters saved per request.
+  - When a workflow's main process dies, research subagents that had already finished keep their results instead of being marked failed.
+  - Workflow lanes in the widget and `status` show each subagent's model.
+  - Read-only installs no longer log a "permission denied" error about the upgrade notice on every start.
+
+## v0.5.49 - 2026-10-17
+
+- **pi-subagents 0.79.0.**
+  - Forked research subagents reuse the parent's prompt cache, and `/subagent-cost` reports no longer ride along in every later request, so parallel runs cost fewer tokens.
+  - When a provider stops a subagent with an error such as a content-filter refusal, the error now includes the provider's reply, so a refusal can be told apart from an outage.
+  - `subagent` stays available after an update or `/reload` mid-session.
+- **pi-web-access 0.42.0.** DeepSeek's Search API is available as a search provider: `feynman search set deepseek <key>`. It bills each search, so `auto` never picks it.
+- `.env.example` lists `OPENALEX_API_KEY`, which raises the OpenAlex rate limit for long literature runs (thanks @fanfyh).
+
+## v0.5.48 - 2026-10-16
+
+- **Pi 1.3.0.**
+  - Tool calls whose arguments contain a backslash sequence like `\usepackage` no longer lose fields, which mattered for LaTeX in drafts and papers.
+  - Gateway errors such as "Unable to forward upstream stream" and "service is temporarily unavailable" are retried instead of ending the turn.
+  - Anthropic requests no longer fail with a 400 when a failed tool result contains images.
+  - A tool call with malformed arguments now fails instead of running with partial ones.
+
+## v0.5.47 - 2026-10-15
+
+- **pi-web-access 0.41.0.** Sites that turn away AI fetchers can be read by setting your own User-Agent: add `"fetchContent": { "userAgent": "..." }` to `~/.feynman/agent/web-search.json`. A SearXNG instance on your own machine now works without opening every local service to page fetches.
+
+## v0.5.46 - 2026-10-13
+
+- **Recent arXiv papers resolve by DOI.** OpenAlex adds new arXiv preprints days late, so looking up an arXiv DOI (`10.48550/arXiv.<id>`) it doesn't have yet failed. It is now looked up on arXiv itself, with a note.
+- When a topic sent to the arXiv source is written in arXiv's own query syntax (`search_query=all:...`, `submittedDate:[...]`), only the search words are passed on to OpenAlex.
+
+## v0.5.45 - 2026-10-13
+
+- **Paper lookups recover instead of failing.**
+  - A topic sent to the arXiv source, which only looks papers up by ID, now gets OpenAlex semantic search results with a note saying so, instead of an error the model had to recover from.
+  - When arXiv times out or is overloaded, arXiv ID lookups come from Semantic Scholar, with a note saying so.
+
+## v0.5.44 - 2026-10-13
+
+- **`feynman search set` works with every search provider pi-web-access supports.** It accepted only `auto`, `exa`, `perplexity` and `gemini`; it now takes all 39, including Brave, Tavily, Kagi, Serper, You.com, SearXNG and DuckDuckGo, and saves each key where pi-web-access reads it. `feynman search status` and `feynman doctor` name the provider you chose and list every saved key, and no longer describe an outdated automatic search order.
+- **pi-web-access 0.40.0.** Asking about a YouTube or local video works again when a thumbnail comes back with the transcript, excerpts no longer cut an emoji in half, and a new opt-in setting (`fetchContent.redirects: "same-origin"`) refuses redirects to another site.
+
+## v0.5.43 - 2026-10-13
+
+- **Feynman reads and writes Pi's configuration only through Pi.** Settings now go through Pi's settings manager, which locks the file and changes only the keys Feynman sets, so a change Pi or another Feynman window makes at the same moment is no longer overwritten. Model checks, local-model detection and `feynman doctor` read your models through Pi, so comments in `models.json`, a `baseUrl` set on one model, and a key saved with `feynman model login` count the same way they do when Feynman runs.
+- `feynman doctor` no longer warns about a custom provider whose key you saved with `feynman model login` rather than writing it into `models.json`.
+
+## v0.5.42 - 2026-10-13
+
+- **Pi 1.2.0 and pi-subagents 0.78.0.**
+  - With an OpenRouter key, `/model` lists only the models that key can use, with their real context sizes and prices.
+  - "The upstream provider returned an error" is retried instead of ending the turn, and Anthropic requests rejected for too many strict tools are retried once.
+  - `feynman -p` warns and exits 1 when the answer was cut off at the model's output limit.
+  - On Windows, reading or writing saved logins no longer fails with `EPERM` while an old lock is cleaned up.
+  - Pressing `Esc` keeps a research run stopped; a subagent finishing a moment later no longer restarts it.
+  - Reports are no longer overwritten when a subagent run is resumed, and a timed-out subagent's partial output reaches the lead agent.
+  - The `workflowScript contains dynamic child launches` warning no longer prints on every parallel run.
+- **`feynman model login` offers every provider Pi supports with an API key.** That is 41 providers instead of Feynman's own list of 16, adding DeepSeek, Fireworks, Together, NVIDIA, Google Vertex, Cloudflare, Qwen and others. Pi now asks for what each provider needs, so Cloudflare's extra fields and Bedrock's profile or bearer-token options work. Pressing Enter on an empty key no longer saves an empty credential.
+- **Turning off Feynman's telemetry also turns off Pi's.** `FEYNMAN_TELEMETRY=off` (or `DO_NOT_TRACK=1`) now sets Pi's own `PI_TELEMETRY=0` for its install reporting.
+- Feynman now honors Pi's own `sessionDir` setting and `PI_CODING_AGENT_SESSION_DIR` when you don't pass `--session-dir`.
+- `feynman model set` and the default-model check use Pi's settings API, so they match what Pi launches with (including trusted project settings).
+
+## v0.5.41 - 2026-10-12
+
+- **A fresh `npm install` works again.** Pi 1.2.0, released today, made new npm installs of Feynman 0.5.40 fail on every command except `-v` (`does not provide an export named 'MCP_TYPESCRIPT_PREAMBLE'`). Pi 1.1.0 asks for its own sub-packages with open version ranges, so npm pulled Pi 1.2.0's copies. Feynman now pins those sub-packages to the Pi version it ships. The curl and PowerShell installers were not affected.
+- **An expired sign-in no longer looks like no model.** Feynman treated a ChatGPT, Claude or Copilot sign-in whose short-lived access token had expired as if no model were set up. `feynman` reopened the setup menu, and since 0.5.36 `feynman -p` refused to run. Pi renews the token on the next request, so Feynman now leaves that to Pi and asks you to sign in again only when renewal really fails.
+- **`--model` accepts the names Pi accepts.** Bare model IDs (`claude-opus-5-5`), short names (`sonnet`) and a thinking suffix (`anthropic/claude-opus-5-5:high`) now work, preferring a provider you are signed in to; `provider/model` and `provider:model` still work. Pro-class models stay blocked.
+- **After you sign in, the model list matches your account.** `feynman model login` refreshes that provider's model list, so an OpenRouter key gets the models it can actually use before Feynman picks a default.
+- A provider error hint now appears once the run has stopped, not in the middle of an automatic retry.
+- Launching Feynman no longer erases your terminal's scrollback.
+- The llama.cpp provider is recognized as a local model.
+- **Preview and PDF export find more browsers.** Chromium, Edge and Brave on Linux, Edge under `Program Files (x86)` and Brave in your user folder on Windows, and apps in `~/Applications` on macOS. Thanks to @A-ryanVAT-S (#343).
+
+## v0.5.40 - 2026-10-12
+
+- **alphaXiv sign-in messages name the right command.** When you weren't signed in, `feynman alpha search`, `get` and the paper tools said to run `alpha login`, a command that isn't installed with Feynman. They now say `feynman alpha login`. (Alpha Hub 0.1.7.)
+- Security: Alpha Hub now requires `@modelcontextprotocol/sdk` 1.32.1 or later, so a fresh install can't resolve a version affected by GHSA-6qxp-vccf-f47h.
+
 ## v0.5.39 - 2026-10-12
 
 - **Web search and fetching are steadier (pi-web-access 0.39.0).** Search summaries now read each source's snippet, so providers that return only links still produce a summary. `auto` search moves on when a provider returns nothing, a stalled Perplexity request gives up after 30 seconds, and a DuckDuckGo bot check is reported as a block instead of an empty search. `fetch_content` answers end with the `get_search_content` call that reads the stored page, answer mode with several URLs shows every page's answer, and PDFs can go to a document parser you run yourself (`pdf.provider: "endpoint"` in `~/.feynman/agent/web-search.json`).

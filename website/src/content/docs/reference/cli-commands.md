@@ -57,12 +57,30 @@ Use `feynman alpha ...` rather than a global `alpha` binary so the bundled clien
 
 See [Package Stack](/docs/reference/package-stack) for the core packages and optional presets.
 
+## MCP servers
+
+| Command | Description |
+| --- | --- |
+| `feynman mcp add <server> [options] -- <command> [args...]` | Add a local (stdio) MCP server |
+| `feynman mcp add <server> --url <url>` | Add a remote MCP server |
+| `feynman mcp list` | Show configured servers and whether they connect |
+| `feynman mcp remove <server>` | Remove a server |
+
+This is Pi's `mcp` command, so its help and messages say `pi mcp`; use `feynman mcp` instead. Servers are saved in `~/.feynman/agent/mcp.json` and available in every Feynman session. For example, to give Feynman your Zotero library with [zotero-mcp](https://github.com/54yyyu/zotero-mcp):
+
+```bash
+feynman mcp add zotero --env ZOTERO_LOCAL=true -- zotero-mcp
+feynman mcp list
+```
+
+Inside a session, `/mcp` shows connections and lets you sign in or reconnect. Pi's [MCP guide](https://pi.dev/docs/latest/mcp) covers remote servers, tokens, and tool exposure.
+
 ## Web search
 
 | Command | Description |
 | --- | --- |
 | `feynman search status` | Show Pi web-access status and config path |
-| `feynman search set <provider> [api-key]` | Set the web search provider (`auto`, `exa`, `perplexity`, or `gemini`) and optionally save its API key |
+| `feynman search set <provider> [api-key]` | Set the web search provider (any pi-web-access provider; run with no provider to list them) and optionally save its API key |
 | `feynman search clear` | Reset the web search provider to `auto` while keeping API keys |
 
 See [Web Search](/docs/tools/web-search).
@@ -101,7 +119,7 @@ These are equivalent to launching the REPL and typing the corresponding slash co
 | Flag | Description |
 | --- | --- |
 | `--prompt "<text>"`, `-p` | Run one prompt and exit (one-shot mode) |
-| `--model <provider/model\|provider:model>` | Force a specific approved research model for this session |
+| `--model <model>` | Force an approved research model for this session: `provider/model`, `provider:model`, a bare ID or short name such as `sonnet`, optionally with a thinking suffix such as `:high` |
 | `--service-tier <tier>` | Override the request service tier for this run |
 | `--thinking <level>` | Set thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `--cwd <path>` | Set the working directory for tools |

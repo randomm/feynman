@@ -34,7 +34,7 @@ async function withPaperFallback<T>(
 	try {
 		return await run();
 	} catch (error) {
-		const message = (error instanceof Error ? error.message : String(error)).replace("`alpha login`", "`feynman alpha login`");
+		const message = error instanceof Error ? error.message : String(error);
 		if (fallback) {
 			try {
 				return { fallbackNote: `alphaXiv did not answer (${message}); these results are from ${fallback.source}.`, ...(await fallback.run()) };

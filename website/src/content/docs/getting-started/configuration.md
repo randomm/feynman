@@ -15,6 +15,7 @@ Feynman stores user-level configuration and state under `~/.feynman/`, created o
 │   ├── settings.json       # Default model, thinking level, packages
 │   ├── auth.json           # Provider credentials (user-only permissions)
 │   ├── models.json         # Custom and local providers
+│   ├── mcp.json            # MCP servers from `feynman mcp add`
 │   ├── web-search.json     # Web search provider and keys
 │   ├── web-search-cache/   # Fetched pages, kept for one hour
 │   ├── extensions/subagent/config.json  # Subagent runtime config
@@ -52,7 +53,7 @@ Web search, page fetching, and PDF extraction come from the bundled `pi-web-acce
 
 ```bash
 feynman search status
-feynman search set perplexity <api-key>   # or exa, gemini, auto
+feynman search set brave <api-key>   # or exa, tavily, perplexity, kagi, auto, ... (`feynman search set` lists all)
 feynman search clear                      # back to auto, keys kept
 ```
 

@@ -35,9 +35,9 @@ import {
 } from "./pi/packages.js";
 import {
 	canonicalizeModelSpec,
+	resolveExplicitModelSpec,
 	ensureFeynmanSettings,
 	normalizeThinkingLevel,
-	readJson,
 	type ThinkingLevel,
 } from "./pi/settings.js";
 import { BUNDLED_PI_PACKAGES, buildPiEnv, findWindowsBash, WINDOWS_BASH_MISSING_NOTICE, type PiRuntimeOptions } from "./pi/runtime.js";
@@ -58,12 +58,12 @@ import {
 	isProClassModelSpec,
 	getSupportedModelRecords,
 } from "./model/catalog.js";
-import { clearSearchConfig, printSearchStatus, setSearchProvider } from "./search/commands.js";
-import type { PiWebSearchProvider } from "./pi/web-access.js";
+import { clearSearchConfig, printSearchStatus, searchSetUsage, setSearchProvider } from "./search/commands.js";
 import { fetchLatestFeynmanVersion, getFeynmanUpgradeLines, isNewerVersion } from "./system/self-update.js";
 import { runDoctor, runStatus } from "./setup/doctor.js";
 import { setupPreviewDependencies } from "./setup/preview.js";
 import { runSetup } from "./setup/setup.js";
+import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { noModelMessage } from "./setup/prompts.js";
 import {
 	captureTelemetryEvent,
@@ -93,6 +93,7 @@ const UNKNOWN_OPTION_HINTS: Record<string, string> = {
 	"--json": "feynman --mode json",
 	"--work-dir": "feynman --cwd <dir>",
 	"--path": "feynman --cwd <dir>",
+	"--update": "feynman update",
 };
 
 // Removed commands fail instead of falling through to a chat prompt.
@@ -309,7 +310,11 @@ async function handleModelCommand(subcommand: string | undefined, args: string[]
 		return;
 	}
 
-	const setHint = /[/:]/.test(subcommand) ? `Did you mean \`feynman model set ${subcommand}\`? ` : "";
+	const setHint = /[/:]/.test(subcommand)
+		? `Did you mean \`feynman model set ${subcommand}\`? `
+		: subcommand === "setup"
+			? "To sign in, run `feynman model login`. "
+			: "";
 	throw new Error(`Unknown model command: ${subcommand}\n${setHint}Run \`feynman model help\` to see model commands.`);
 }
 
@@ -335,7 +340,8 @@ async function handleUpdateCommand(piOptions: PiRuntimeOptions, feynmanVersion: 
 
 async function handlePackagesCommand(subcommand: string | undefined, args: string[], piOptions: PiRuntimeOptions): Promise<void> {
 	const configuredSources = new Set(
-		((readJson(resolve(piOptions.feynmanAgentDir, "settings.json")).packages ?? []) as Array<string | { source?: string }>)
+		SettingsManager.create(process.cwd(), piOptions.feynmanAgentDir, { projectTrusted: false })
+			.getPackages()
 			.map((entry) => (typeof entry === "string" ? entry : entry.source)),
 	);
 
@@ -393,12 +399,8 @@ function handleSearchCommand(subcommand: string | undefined, args: string[]): vo
 	}
 
 	if (subcommand === "set") {
-		const provider = args[0] as PiWebSearchProvider | undefined;
-		const validProviders: PiWebSearchProvider[] = ["auto", "perplexity", "exa", "gemini"];
-		if (!provider || !validProviders.includes(provider)) {
-			throw new Error("Usage: feynman search set <auto|perplexity|exa|gemini> [api-key]");
-		}
-		setSearchProvider(provider, args[1]);
+		if (!args[0]) throw new Error(searchSetUsage());
+		setSearchProvider(args[0], args[1]);
 		return;
 	}
 
@@ -544,7 +546,9 @@ export async function main(): Promise<void> {
 			...commandTelemetry,
 			duration_ms: durationMs,
 			exit_code: exitCode,
-			...(exitCode === 0 ? {} : { pi_stderr: getLastPiStderr() }),
+			// A fixed reason for a deliberate non-zero exit, so it isn't read as a crash.
+			...(exitReason ? { exit_reason: exitReason } : {}),
+			...(exitCode === 0 || exitReason ? {} : { pi_stderr: getLastPiStderr() }),
 		};
 		captureTelemetryEvent(exitCode === 0 ? "feynman_command_completed" : "feynman_command_failed", completeProperties);
 	} catch (error) {
@@ -562,6 +566,9 @@ export async function main(): Promise<void> {
 	}
 }
 
+// Set when Feynman exits non-zero on purpose (see the completion telemetry in main).
+let exitReason: "no_model" | undefined;
+
 async function runMain(input: { here: string; appRoot: string; feynmanVersion: string | undefined }): Promise<void> {
 	const { appRoot, feynmanVersion } = input;
 	const bundledSettingsPath = resolve(appRoot, ".feynman", "settings.json");
@@ -575,6 +582,20 @@ async function runMain(input: { here: string; appRoot: string; feynmanVersion: s
 	const alphaPassthrough = resolveAlphaPassthroughArgs(rawArgs);
 	if (alphaPassthrough && alphaPassthrough.args[0] !== "status") {
 		await runBundledAlphaCli(appRoot, alphaPassthrough.args, { cwd: alphaPassthrough.cwd });
+		return;
+	}
+
+	// Pi owns MCP server management; its flags (--env, --url, ...) would fail Feynman's own parser.
+	// Servers land in this Feynman home's agent directory, which every Feynman session loads.
+	if (rawArgs[0] === "mcp") {
+		const piOptions: PiRuntimeOptions = {
+			appRoot,
+			workingDir: process.cwd(),
+			sessionDir: getDefaultSessionDir(feynmanHome),
+			feynmanAgentDir,
+			feynmanVersion,
+		};
+		process.exitCode = await runPi(piOptions, rawArgs, buildPiEnv(piOptions));
 		return;
 	}
 
@@ -641,7 +662,15 @@ async function runMain(input: { here: string; appRoot: string; feynmanVersion: s
 	}
 
 	const workingDir = resolve(values.cwd ?? process.cwd());
-	const sessionDir = resolve(values["session-dir"] ?? getDefaultSessionDir(feynmanHome));
+	// Pi's order: --session-dir, then PI_CODING_AGENT_SESSION_DIR, then the sessionDir
+	// setting; Feynman's own default comes last.
+	const sessionDir = resolve(
+		workingDir,
+		values["session-dir"] ??
+			process.env.PI_CODING_AGENT_SESSION_DIR ??
+			SettingsManager.create(workingDir, feynmanAgentDir).getSessionDir() ??
+			getDefaultSessionDir(feynmanHome),
+	);
 	const feynmanSettingsPath = resolve(feynmanAgentDir, "settings.json");
 	const feynmanAuthPath = resolve(feynmanAgentDir, "auth.json");
 	const { defaultThinkingLevel, launchThinkingLevel } = resolveThinkingConfig(values.thinking ?? process.env.FEYNMAN_THINKING);
@@ -788,9 +817,13 @@ async function runMain(input: { here: string; appRoot: string; feynmanVersion: s
 			throw new Error(`Pro-class model disabled: ${requestedExplicitModelSpec}. Choose an approved research model.`);
 		}
 		const modelRuntime = await createModelRuntime(feynmanAuthPath);
-		const canonicalModelSpec = canonicalizeModelSpec(requestedExplicitModelSpec, modelRuntime);
+		const canonicalModelSpec = resolveExplicitModelSpec(requestedExplicitModelSpec, modelRuntime);
 		if (!canonicalModelSpec) {
 			throw new Error(`Unknown model: ${requestedExplicitModelSpec}. Run \`feynman model list\` to see available models.`);
+		}
+		// Check the resolved model too: a short name can resolve to a Pro-class one.
+		if (isProClassModelSpec(canonicalModelSpec.replace(/:(off|minimal|low|medium|high|xhigh|max)$/, ""))) {
+			throw new Error(`Pro-class model disabled: ${canonicalModelSpec}. Choose an approved research model.`);
 		}
 		explicitModelSpec = canonicalModelSpec;
 	}
@@ -819,6 +852,7 @@ async function runMain(input: { here: string; appRoot: string; feynmanVersion: s
 		if (!getCurrentModelSpec(feynmanSettingsPath)) {
 			console.error(noModelMessage(promptGiven));
 			process.exitCode = 1;
+			exitReason = "no_model";
 			return;
 		}
 		await ensureFeynmanSettings(feynmanSettingsPath, bundledSettingsPath, appRoot, defaultThinkingLevel, feynmanAuthPath);
@@ -827,6 +861,7 @@ async function runMain(input: { here: string; appRoot: string; feynmanVersion: s
 		&& (await getAuthenticatedModelRecords(feynmanAuthPath)).length === 0) {
 		console.error(noModelMessage(promptGiven));
 		process.exitCode = 1;
+		exitReason = "no_model";
 		return;
 	}
 
@@ -850,13 +885,12 @@ async function runMain(input: { here: string; appRoot: string; feynmanVersion: s
 	if (command && workflowCommandNames.has(command) && mode !== "rpc" && mode !== "json" && process.stdout.isTTY) {
 		const effectiveSpec = explicitModelSpec ?? getCurrentModelSpec(feynmanSettingsPath);
 		const providerId = effectiveSpec?.split("/")[0] ?? "";
-		if (effectiveSpec && isLocalModelProvider(feynmanAuthPath, providerId)) {
+		if (effectiveSpec && await isLocalModelProvider(feynmanAuthPath, providerId)) {
 			preLaunchNotice = buildLocalModelWorkflowNotice(effectiveSpec, command);
 		}
 	}
 	if (process.platform === "win32" && mode !== "rpc" && mode !== "json" && process.stdout.isTTY) {
-		const shellPath = readJson(feynmanSettingsPath).shellPath;
-		if (typeof shellPath !== "string" && !findWindowsBash()) {
+		if (!SettingsManager.create(workingDir, feynmanAgentDir, { projectTrusted: false }).getShellPath() && !findWindowsBash()) {
 			preLaunchNotice = [preLaunchNotice, WINDOWS_BASH_MISSING_NOTICE].filter(Boolean).join("\n");
 		}
 	}

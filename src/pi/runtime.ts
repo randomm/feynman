@@ -3,13 +3,13 @@ import { createRequire } from "node:module";
 import { delimiter, dirname, resolve, win32 } from "node:path";
 
 import {
-	BROWSER_FALLBACK_PATHS,
 	MERMAID_FALLBACK_PATHS,
 	PANDOC_FALLBACK_PATHS,
+	resolveBrowser,
 	resolveExecutable,
 	type ResolvedExecutables,
 } from "../system/executables.js";
-import { getPostHogChildEnv } from "../telemetry/posthog.js";
+import { getPostHogChildEnv, isTelemetryDisabled } from "../telemetry/posthog.js";
 
 // Pi packages shipped as Feynman dependencies and loaded from their install
 // paths through settings.json `packages` (Pi's documented local-path source).
@@ -183,7 +183,7 @@ export function buildPiEnv(options: PiRuntimeOptions, executables?: ResolvedExec
 	const pandocPath = process.env.PANDOC_PATH ?? executables?.pandoc ?? resolveExecutable("pandoc", PANDOC_FALLBACK_PATHS);
 	const mermaidPath = process.env.MERMAID_CLI_PATH ?? executables?.mermaid ?? resolveExecutable("mmdc", MERMAID_FALLBACK_PATHS);
 	const browserPath =
-		process.env.PUPPETEER_EXECUTABLE_PATH ?? executables?.browser ?? resolveExecutable("google-chrome", BROWSER_FALLBACK_PATHS);
+		process.env.PUPPETEER_EXECUTABLE_PATH ?? executables?.browser ?? resolveBrowser();
 	return {
 		...process.env,
 		PATH: [binPath, process.env.PATH ?? "", process.platform === "win32" ? findWindowsBash()?.addDir : undefined]
@@ -194,8 +194,9 @@ export function buildPiEnv(options: PiRuntimeOptions, executables?: ResolvedExec
 		FEYNMAN_BIN_PATH: getFeynmanCliBinPath(options.appRoot),
 		PI_CODING_AGENT_DIR: options.feynmanAgentDir,
 		PANDOC_PATH: pandocPath,
-		PI_HARDWARE_CURSOR: process.env.PI_HARDWARE_CURSOR ?? "1",
 		PI_SKIP_VERSION_CHECK: process.env.PI_SKIP_VERSION_CHECK ?? "1",
+		// A Feynman telemetry opt-out also turns off Pi's install telemetry (docs/environment-variables.md).
+		...(isTelemetryDisabled() && process.env.PI_TELEMETRY === undefined ? { PI_TELEMETRY: "0" } : {}),
 		MERMAID_CLI_PATH: mermaidPath,
 		PUPPETEER_EXECUTABLE_PATH: browserPath,
 		...getPostHogChildEnv(),
